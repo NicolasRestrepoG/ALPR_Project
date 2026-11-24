@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "alpr"
+version = "0.1.0"
+description = "ALPR Colombia — automatic recognition of Colombian particular plates for gate access control"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+
+# Phase 1 dependencies only. PyTorch arrives in Phase 4, not on day one.
+# Every module under alpr/data_sources/ imports these lazily, inside the
+# function that needs them, so the test suite runs on the standard library.
+dependencies = [
+    "requests>=2.31",
+    "tqdm>=4.66",
+    "gdown>=5.1",
+    "yt-dlp>=2024.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+]
+
+[project.scripts]
+acquire = "alpr.data_sources.acquire:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["alpr"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

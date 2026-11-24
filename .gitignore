@@ -1,0 +1,29 @@
+# Datasets, generated corpora and the real test set are never in version control.
+data/
+
+# Licence-request email drafts: generated locally, signed with personal details.
+docs/licence_requests/
+
+# Evaluation output
+eval/reports/
+
+# Secrets. ROBOFLOW_API_KEY and friends belong in the environment, never in the
+# repo — but if one ever lands in a .env here, it must not be committable.
+.env
+.env.*
+*.key
+# ...except the template, which documents what is needed and holds no values.
+# A test asserts it stays valueless.
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# OS
+.DS_Store
