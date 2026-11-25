@@ -6,10 +6,15 @@ access control at a residential building.
 The project is planned in 8 phases and 20 sprints. This README covers only how to
 run what currently exists.
 
-**Status: Phase 1 complete (Sprints 1.1 and 1.2).** `data_sources` exists, with all
-eleven sources registered, licence-audited and reachable through one command.
-Nothing else exists yet, deliberately — one phase creates one module, and nothing is
-scaffolded ahead.
+**Status: Phase 1 complete; Phase 2 in progress (Sprint 2.1).** `data_sources`
+has all eleven sources registered, licence-audited and reachable through one
+command. `plates` has the MT-001 geometry, rectification, and the `annotate`
+labelling tool. Nothing else exists yet, deliberately — one phase creates one
+module, and nothing is scaffolded ahead.
+
+Own photographs are deferred until just before Phase 5. Until then, the glyph
+source and a provisional test set come from the Roboflow images, labelled with
+`annotate`.
 
 ## Setup
 
@@ -18,8 +23,8 @@ python3 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
 ```
 
-Phase 1 needs three runtime packages (`requests`, `tqdm`, `gdown`). PyTorch arrives
-in Phase 4, not on day one.
+Phase 1 needs `requests`, `tqdm` and `gdown`; Phase 2 adds `numpy` and
+`opencv-python-headless`. PyTorch arrives in Phase 4, not on day one.
 
 ## Credentials
 
@@ -44,7 +49,7 @@ sources. Everything else works without any credentials.
 ## Test
 
 ```bash
-.venv/bin/pytest          # ~0.4 s, no ML libraries required
+.venv/bin/pytest          # a few seconds; no ML framework required
 .venv/bin/ruff check .
 .venv/bin/ruff format .
 ```
@@ -52,6 +57,7 @@ sources. Everything else works without any credentials.
 The acquisition layer imports nothing heavier than the standard library at load
 time — `requests` and friends are imported inside the functions that download. That
 property is enforced by a test (`test_phase_contract.py`), not just intended.
+`alpr.plates` needs numpy and OpenCV but no ML framework, also enforced by a test.
 
 ## The `acquire` command
 
@@ -142,6 +148,44 @@ deltas of inconsistent sign — so the two were annotated independently. Both ar
 as published. Phase 6 should derive the box from the corners rather than mixing the
 two conventions.
 
+## Labelling plates — the `annotate` command
+
+```bash
+annotate serve roboflow_proyecto_placas   # opens the labelling page (127.0.0.1 only)
+annotate status roboflow_proyecto_placas  # progress, plate types, character coverage
+annotate sheet roboflow_proyecto_placas   # contact sheet of rectified crops
+annotate measure roboflow_proyecto_placas # measure plate layout from labelled plates
+```
+
+The page shows each plate zoomed to its source box. Click the plate's four
+**outer** corners in any order — they are ordered TL/TR/BR/BL by the same helper
+the sources and the rectifier use. A magnifier follows the cursor; drag a corner to
+adjust it. As soon as four corners are down, the rectified 192 × 96 crop appears
+with the MT-001 character cells drawn over it: if it is rotated, mirrored, or the
+characters sit outside their cells, the click is wrong — fix it before saving.
+
+Type the plate, pick the type (`1` particular, `2` público, `3` moto, `4` no plate,
+`5` unknown), tag it, and press Enter to save and move to the next unlabelled plate.
+Every save is written immediately; stop and resume at any time.
+
+Tag the sharpest, most frontal plates `glyph_source`: Sprint 2.2 cuts the 36
+characters from them, and they must stay out of the provisional test set. The
+coverage panel counts characters over **distinct** plates — the Roboflow sets
+photograph the same car many times — against the gate of five per character.
+
+Labels go to `data/labels/<source>.csv` (or `data/raw/own_photos/labels.csv`), in
+full-image pixel coordinates, in the column layout `own_photos` already reads.
+
+### Plate geometry — what is spec and what is provisional
+
+`alpr/plates/geometry.py` is the single source of truth for plate layout, in
+millimetres. Plate size, character size, stroke, gap and municipality lettering are
+MT-001 as published. The logo gutter and the vertical positions are not in any
+public summary; they are **provisional**, measured from near-frontal photos, and
+marked as such field by field. Once ~20 frontal plates are labelled,
+`annotate measure` reports the measured layout next to the current values — update
+the provisional fields from it before Sprint 2.2's renderer relies on them.
+
 ## Two contracts that cause silent failures if ignored
 
 **Corners are always ordered TL, TR, BR, BL.** CCPD publishes its four vertices
@@ -182,6 +226,11 @@ alpr/data_sources/   [phase 1]  acquisition — one module per source
   imagesize                     header-only image dimensions, no image library
   assets · ccpd · roboflow · gated · platesmania · dashcam · own_photos
   acquire            (CLI)
+alpr/plates/         [phase 2]  the plate domain model
+  geometry                      MT-001 in millimetres — single source of truth
+  rectify                       4 corners → canonical 192 × 96 crop
+  labels                        label storage, items to label, coverage
+  annotate           (CLI)      click-4-corners labelling tool
 tests/                          mirrors the module layout
 data/                           never in version control
 docs/

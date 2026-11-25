@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plate Labelling</title>
+<style>
+  :root {
+    --bg: #15171a; --panel: #1e2125; --line: #30353b; --text: #e6e8ea; --muted: #9aa1a9;
+    --accent: #ffcc33; --ok: #4cc38a; --bad: #ff6b6b; --pt: #00d0ff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  header { display: flex; gap: 16px; align-items: center; padding: 8px 16px;
+           border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  header b { color: var(--accent); }
+  .bar { flex: 1; min-width: 160px; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; background: var(--ok); width: 0; }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 620px; gap: 12px; padding: 12px 16px; }
+  @media (max-width: 1100px) { main { grid-template-columns: 1fr; } }
+  #stage { position: relative; background: #000; border: 1px solid var(--line); }
+  #canvas { display: block; width: 100%; height: auto; cursor: crosshair; }
+  #loupe { position: fixed; width: 180px; height: 180px; border: 2px solid var(--accent);
+           border-radius: 50%; pointer-events: none; display: none; box-shadow: 0 4px 16px #000a; }
+  aside { display: flex; flex-direction: column; gap: 10px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px; }
+  .card h3 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  #preview { width: 100%; aspect-ratio: 2 / 1; background: #000; display: block; image-rendering: pixelated; }
+  #previewNote { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  input[type=text] { width: 100%; font: 600 26px/1 ui-monospace, Menlo, monospace; letter-spacing: .15em;
+                     text-transform: uppercase; padding: 8px 10px; background: #0e1012; color: var(--text);
+                     border: 1px solid var(--line); border-radius: 4px; }
+  input[type=text]:focus { outline: 2px solid var(--accent); }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { border: 1px solid var(--line); background: #0e1012; color: var(--text); border-radius: 14px;
+          padding: 4px 10px; cursor: pointer; user-select: none; font-size: 13px; }
+  .chip.on { background: var(--accent); color: #111; border-color: var(--accent); }
+  .chip kbd { opacity: .6; font-size: 11px; margin-left: 4px; }
+  button { background: #2a2f35; color: var(--text); border: 1px solid var(--line); border-radius: 4px;
+           padding: 7px 12px; cursor: pointer; font-size: 13px; }
+  button.primary { background: var(--accent); color: #111; border-color: var(--accent); font-weight: 600; }
+  button:hover { filter: brightness(1.15); }
+  #msg { min-height: 20px; font-size: 13px; }
+  #msg.err { color: var(--bad); } #msg.ok { color: var(--ok); }
+  .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 3px; font: 12px ui-monospace, Menlo, monospace; }
+  .grid span { text-align: center; padding: 2px 0; border-radius: 3px; background: #0e1012; }
+  .grid span.low { color: var(--bad); } .grid span.okc { color: var(--ok); }
+  .help { color: var(--muted); font-size: 12px; }
+  .help kbd { background: #0e1012; border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; color: var(--text); }
+  .key { color: var(--muted); font-size: 12px; word-break: break-all; }
+</style>
+</head>
+<body>
+<header>
+  <span>Source <b id="source">–</b></span>
+  <span id="pos">–</span>
+  <div class="bar"><i id="barFill"></i></div>
+  <span id="progress">–</span>
+  <span id="distinct">–</span>
+</header>
+<main>
+  <section>
+    <div id="stage"><canvas id="canvas"></canvas></div>
+    <div class="key" id="key"></div>
+  </section>
+  <aside>
+    <div class="card">
+      <h3>Rectified 192 × 96, with MT-001 cells</h3>
+      <img id="preview" alt="">
+      <div id="previewNote">Click the plate's four outer corners. Any order works.</div>
+    </div>
+    <div class="card">
+      <h3>Plate text</h3>
+      <input id="plate" type="text" maxlength="8" autocomplete="off" spellcheck="false" list="plates" placeholder="ABC123">
+      <datalist id="plates"></datalist>
+    </div>
+    <div class="card">
+      <h3>Type</h3>
+      <div class="row" id="types"></div>
+    </div>
+    <div class="card">
+      <h3>Tags</h3>
+      <div class="row" id="tags"></div>
+    </div>
+    <div class="card">
+      <div class="row">
+        <button class="primary" id="save">Save &amp; next ⏎</button>
+        <button id="prev">← Prev</button>
+        <button id="next">Next →</button>
+        <button id="nextOpen">Next unlabelled</button>
+        <button id="clear">Clear corners</button>
+        <button id="del">Delete label</button>
+      </div>
+      <div id="msg"></div>
+    </div>
+    <div class="card">
+      <h3>Character coverage — distinct particular plates (target ≥ 5)</h3>
+      <div class="grid" id="cov"></div>
+    </div>
+    <div class="help">
+      <kbd>click</kbd> add corner · <kbd>drag</kbd> move corner · <kbd>⌫</kbd> remove last ·
+      <kbd>⏎</kbd> save &amp; next · <kbd>←</kbd>/<kbd>→</kbd> prev/next (outside the text box) ·
+      <kbd>Esc</kbd> leave the text box · <kbd>1</kbd>–<kbd>5</kbd> type
+    </div>
+  </aside>
+</main>
+<canvas id="loupe" width="180" height="180"></canvas>
+<script>
+"use strict";
+const MAIN_TYPES = [["particular", "1"], ["publico", "2"], ["moto", "3"], ["non_plate", "4"], ["unknown", "5"]];
+const $ = id => document.getElementById(id);
+const canvas = $("canvas"), ctx = canvas.getContext("2d");
+const loupe = $("loupe"), lctx = loupe.getContext("2d");
+let state = null, item = null, img = new Image(), points = [], plateType = "particular",
+    tags = new Set(), dragging = -1, previewTimer = null;
+
+async function api(path, body) {
+  const opts = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const res = await fetch(path, opts);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+
+function say(text, kind) { const m = $("msg"); m.textContent = text || ""; m.className = kind || ""; }
+
+function renderState() {
+  $("source").textContent = state.source;
+  $("progress").textContent = `${state.labelled} / ${state.total} labelled`;
+  $("barFill").style.width = `${(100 * state.labelled / state.total).toFixed(1)}%`;
+  $("distinct").textContent = `${state.coverage.distinct_plates} distinct plates`;
+  $("plates").innerHTML = state.plates.map(p => `<option value="${p}">`).join("");
+  $("cov").innerHTML = Object.entries(state.coverage.char_counts)
+    .map(([c, n]) => `<span class="${n >= 5 ? "okc" : "low"}">${c}<br>${n}</span>`).join("");
+  const extra = state.types.filter(t => !MAIN_TYPES.some(([m]) => m === t));
+  $("types").innerHTML = MAIN_TYPES.map(([t, k]) => `<span class="chip" data-type="${t}">${t}<kbd>${k}</kbd></span>`).join("")
+    + extra.map(t => `<span class="chip" data-type="${t}">${t}</span>`).join("");
+  $("tags").innerHTML = state.tags.map(t => `<span class="chip" data-tag="${t}">${t}</span>`).join("");
+  document.querySelectorAll("[data-type]").forEach(el => el.onclick = () => { plateType = el.dataset.type; syncChips(); });
+  document.querySelectorAll("[data-tag]").forEach(el => el.onclick = () => {
+    tags.has(el.dataset.tag) ? tags.delete(el.dataset.tag) : tags.add(el.dataset.tag); syncChips(); });
+  syncChips();
+}
+
+function syncChips() {
+  document.querySelectorAll("[data-type]").forEach(el => el.classList.toggle("on", el.dataset.type === plateType));
+  document.querySelectorAll("[data-tag]").forEach(el => el.classList.toggle("on", tags.has(el.dataset.tag)));
+}
+
+async function load(i) {
+  item = await api(`/api/item/${i}`);
+  $("pos").textContent = `#${i + 1} of ${item.total}`;
+  $("key").textContent = item.key + (state.done[i] ? "  ✓ labelled" : "");
+  const lb = item.label;
+  points = lb ? lb.points.map(p => p.slice()) : [];
+  $("plate").value = lb ? lb.plate : "";
+  plateType = lb ? lb.plate_type : "particular";
+  tags = new Set(lb ? lb.tags : []);
+  syncChips();
+  await new Promise((ok, bad) => { img.onload = ok; img.onerror = bad; img.src = `/api/crop/${i}.jpg?t=${Date.now()}`; });
+  canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
+  draw(); updatePreview();
+  say("");
+  $("plate").focus(); $("plate").select();
+}
+
+// Display-only corner naming; the server's order_corners is the authority.
+function ordered(pts) {
+  const cx = pts.reduce((s, p) => s + p[0], 0) / 4, cy = pts.reduce((s, p) => s + p[1], 0) / 4;
+  const idx = [0, 1, 2, 3].sort((a, b) => Math.atan2(pts[a][1] - cy, pts[a][0] - cx) - Math.atan2(pts[b][1] - cy, pts[b][0] - cx));
+  const start = idx.reduce((best, k, j) => (pts[k][0] + pts[k][1] < pts[idx[best]][0] + pts[idx[best]][1] ? j : best), 0);
+  return [...idx.slice(start), ...idx.slice(0, start)];
+}
+
+function draw() {
+  ctx.drawImage(img, 0, 0);
+  const r = Math.max(4, canvas.width / 250);
+  ctx.lineWidth = Math.max(1.5, canvas.width / 900);
+  if (points.length === 4) {
+    const o = ordered(points);
+    ctx.strokeStyle = "rgba(0,208,255,.9)"; ctx.beginPath();
+    o.forEach((k, j) => j ? ctx.lineTo(...points[k]) : ctx.moveTo(...points[k])); ctx.closePath(); ctx.stroke();
+    ctx.font = `bold ${Math.round(r * 3)}px sans-serif`; ctx.fillStyle = "#ffcc33";
+    ["TL", "TR", "BR", "BL"].forEach((name, j) => ctx.fillText(name, points[o[j]][0] + r * 1.5, points[o[j]][1] - r * 1.5));
+  }
+  points.forEach(p => { ctx.fillStyle = "#00d0ff"; ctx.beginPath(); ctx.arc(p[0], p[1], r, 0, 7); ctx.fill();
+                        ctx.strokeStyle = "#000"; ctx.stroke(); });
+}
+
+function toImage(ev) {
+  const b = canvas.getBoundingClientRect();
+  return [(ev.clientX - b.left) * canvas.width / b.width, (ev.clientY - b.top) * canvas.height / b.height];
+}
+
+function nearest(p) {
+  const tol = canvas.width / 60;
+  let best = -1, bd = tol;
+  points.forEach((q, k) => { const d = Math.hypot(q[0] - p[0], q[1] - p[1]); if (d < bd) { bd = d; best = k; } });
+  return best;
+}
+
+canvas.addEventListener("mousedown", ev => {
+  if (ev.button !== 0) return;
+  const p = toImage(ev), k = nearest(p);
+  if (k >= 0) { dragging = k; return; }
+  if (points.length < 4) { points.push(p); draw(); updatePreview(); }
+  else say("Four corners already placed — drag one to move it, or ⌫ to remove the last.", "err");
+});
+window.addEventListener("mouseup", () => { if (dragging >= 0) { dragging = -1; updatePreview(); } });
+canvas.addEventListener("mousemove", ev => {
+  const p = toImage(ev);
+  if (dragging >= 0) { points[dragging] = p; draw(); }
+  showLoupe(ev, p);
+});
+canvas.addEventListener("mouseleave", () => { loupe.style.display = "none"; });
+canvas.addEventListener("contextmenu", ev => { ev.preventDefault(); points.pop(); draw(); updatePreview(); });
+
+function showLoupe(ev, p) {
+  const zoom = 4, half = loupe.width / zoom / 2;
+  loupe.style.display = "block";
+  loupe.style.left = `${ev.clientX + 24}px`; loupe.style.top = `${ev.clientY - loupe.height - 24}px`;
+  lctx.imageSmoothingEnabled = false;
+  lctx.fillStyle = "#000"; lctx.fillRect(0, 0, loupe.width, loupe.height);
+  lctx.drawImage(canvas, p[0] - half, p[1] - half, half * 2, half * 2, 0, 0, loupe.width, loupe.height);
+  lctx.strokeStyle = "#ff3366"; lctx.lineWidth = 1;
+  lctx.beginPath(); lctx.moveTo(loupe.width / 2, 0); lctx.lineTo(loupe.width / 2, loupe.height);
+  lctx.moveTo(0, loupe.height / 2); lctx.lineTo(loupe.width, loupe.height / 2); lctx.stroke();
+}
+
+function updatePreview() {
+  clearTimeout(previewTimer);
+  if (points.length !== 4) {
+    $("preview").removeAttribute("src");
+    $("previewNote").textContent = `${points.length} of 4 corners. Click the plate's outer corners — any order.`;
+    return;
+  }
+  previewTimer = setTimeout(async () => {
+    const q = points.flat().map(v => v.toFixed(2)).join(",");
+    const res = await fetch(`/api/preview/${item.index}?p=${q}`);
+    if (res.ok) {
+      $("preview").src = URL.createObjectURL(await res.blob());
+      $("previewNote").textContent = "Upright, not mirrored, plate edges at the frame? Characters inside the cells?";
+    } else {
+      $("preview").removeAttribute("src");
+      $("previewNote").textContent = "✗ " + (await res.json()).error;
+    }
+  }, 60);
+}
+
+async function save() {
+  try {
+    state = await api(`/api/label/${item.index}`, {
+      points, plate: $("plate").value, plate_type: plateType, tags: [...tags] });
+    renderState();
+    say(`saved ${item.key}`, "ok");
+    const next = state.done.findIndex((d, k) => !d && k > item.index);
+    await load(next >= 0 ? next : Math.min(item.index + 1, state.total - 1));
+  } catch (e) { say(e.message, "err"); }
+}
+
+async function del() {
+  if (!state.done[item.index] || !confirm("Delete this label?")) return;
+  state = await api(`/api/delete/${item.index}`, {});
+  renderState(); await load(item.index); say("label deleted", "ok");
+}
+
+$("save").onclick = save;
+$("prev").onclick = () => load(Math.max(0, item.index - 1));
+$("next").onclick = () => load(Math.min(state.total - 1, item.index + 1));
+$("nextOpen").onclick = () => { const n = state.done.findIndex((d, k) => !d && k > item.index); load(n >= 0 ? n : state.first_open); };
+$("clear").onclick = () => { points = []; draw(); updatePreview(); };
+$("del").onclick = del;
+
+document.addEventListener("keydown", ev => {
+  const inText = document.activeElement === $("plate");
+  if (ev.key === "Enter") { ev.preventDefault(); save(); return; }
+  if (ev.key === "Escape") { $("plate").blur(); return; }
+  if (inText) return;
+  if (ev.key === "Backspace") { ev.preventDefault(); points.pop(); draw(); updatePreview(); }
+  else if (ev.key === "ArrowLeft") load(Math.max(0, item.index - 1));
+  else if (ev.key === "ArrowRight") load(Math.min(state.total - 1, item.index + 1));
+  else { const t = MAIN_TYPES.find(([, k]) => k === ev.key); if (t) { plateType = t[0]; syncChips(); } }
+});
+
+(async () => {
+  state = await api("/api/state");
+  renderState();
+  await load(state.first_open);
+})().catch(e => say(e.message, "err"));
+</script>
+</body>
+</html>

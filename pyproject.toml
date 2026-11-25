@@ -9,14 +9,17 @@ description = "ALPR Colombia — automatic recognition of Colombian particular p
 requires-python = ">=3.11"
 license = { text = "Proprietary" }
 
-# Phase 1 dependencies only. PyTorch arrives in Phase 4, not on day one.
-# Every module under alpr/data_sources/ imports these lazily, inside the
-# function that needs them, so the test suite runs on the standard library.
+# Dependencies arrive with the phase that needs them. PyTorch arrives in Phase 4.
 dependencies = [
+    # Phase 1 — every module under alpr/data_sources/ imports these lazily, inside
+    # the function that needs them, so its tests run on the standard library.
     "requests>=2.31",
     "tqdm>=4.66",
     "gdown>=5.1",
     "yt-dlp>=2024.1",
+    # Phase 2 — image arrays, homography, decoding. BSD-3 and Apache-2.0.
+    "numpy>=1.26",
+    "opencv-python-headless>=4.9",
 ]
 
 [project.optional-dependencies]
@@ -27,6 +30,7 @@ dev = [
 
 [project.scripts]
 acquire = "alpr.data_sources.acquire:main"
+annotate = "alpr.plates.annotate:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["alpr"]
