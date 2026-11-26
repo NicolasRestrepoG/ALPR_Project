@@ -4,6 +4,8 @@
     annotate status <source>    progress, plate types, character coverage
     annotate sheet <source>     contact sheet of rectified crops — the Sprint 2.1 check
     annotate measure <source>   measure the plate layout from labelled, rectified plates
+    annotate freeze <source>... freeze the provisional test set (glyph-source cars excluded)
+    annotate verify             recheck a frozen test set against its checksums
 
 The page is served by the standard library on 127.0.0.1 and talks to nothing else.
 It shows each plate zoomed to the source's box when there is one, a magnifier for
@@ -654,6 +656,36 @@ def cmd_measure(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_freeze(args: argparse.Namespace) -> int:
+    from alpr.plates.testset import freeze
+
+    report = freeze(DataPaths.default(), args.sources, name=args.name)
+    types = ", ".join(f"{k} {v}" for k, v in sorted(report.by_type.items()))
+    print(f"frozen to {report.path}")
+    print(f"{report.entries} entries ({types}) from {report.images} images")
+    print(f"{report.cars} distinct particular cars")
+    print(
+        f"excluded: {report.excluded_glyph_source} photos of glyph-source cars, "
+        f"{report.excluded_unknown} unreadable, {report.near_duplicates} near-duplicates"
+    )
+    thin = report.thin_chars()
+    if thin:
+        print(
+            "characters on fewer than 5 test cars: " + " ".join(f"{c}:{n}" for c, n in thin.items())
+        )
+    return 0
+
+
+def cmd_verify(args: argparse.Namespace) -> int:
+    from alpr.plates.testset import verify
+
+    problems = verify(DataPaths.default(), args.name)
+    for p in problems:
+        print(p, file=sys.stderr)
+    print(f"{args.name}: {'intact' if not problems else f'{len(problems)} problem(s)'}")
+    return 1 if problems else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="annotate", description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -691,6 +723,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="only plates tagged glyph_source (sharpest, most frontal)",
     )
     p.set_defaults(func=cmd_measure)
+
+    p = sub.add_parser("freeze", help="freeze the provisional test set")
+    p.add_argument("sources", nargs="+", help="labelled sources to draw from")
+    p.add_argument("--name", default="provisional", help="set name (default provisional)")
+    p.set_defaults(func=cmd_freeze)
+
+    p = sub.add_parser("verify", help="recheck a frozen test set")
+    p.add_argument("--name", default="provisional")
+    p.set_defaults(func=cmd_verify)
     return parser
 
 

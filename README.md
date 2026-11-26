@@ -6,10 +6,10 @@ access control at a residential building.
 The project is planned in 8 phases and 20 sprints. This README covers only how to
 run what currently exists.
 
-**Status: Phase 1 complete; Phase 2 in progress (Sprint 2.1).** `data_sources`
+**Status: Phase 1 complete; Phase 2 in progress (Sprint 2.2).** `data_sources`
 has all eleven sources registered, licence-audited and reachable through one
-command. `plates` has the MT-001 geometry, rectification, and the `annotate`
-labelling tool. Nothing else exists yet, deliberately — one phase creates one
+command. `plates` has the MT-001 geometry, rectification, the `annotate`
+labelling tool, and a frozen provisional test set. Nothing else exists yet, deliberately — one phase creates one
 module, and nothing is scaffolded ahead.
 
 Own photographs are deferred until just before Phase 5. Until then, the glyph
@@ -155,6 +155,8 @@ annotate serve roboflow_proyecto_placas   # opens the labelling page (127.0.0.1 
 annotate status roboflow_proyecto_placas  # progress, plate types, character coverage
 annotate sheet roboflow_proyecto_placas   # contact sheet of rectified crops
 annotate measure roboflow_proyecto_placas # measure plate layout from labelled plates
+annotate freeze roboflow_proyecto_placas roboflow_placas_colombia_itm   # freeze the test set
+annotate verify                           # recheck the frozen set's checksums
 ```
 
 The page shows each plate zoomed to its source box. Click the plate's four
@@ -184,6 +186,24 @@ turn. A plate that is merely tilted (under ~45°) needs no rotation.
 
 Labels go to `data/labels/<source>.csv` (or `data/raw/own_photos/labels.csv`), in
 full-image pixel coordinates, in the column layout `own_photos` already reads.
+
+### The provisional test set — `annotate freeze`
+
+Until the own photos exist, the V0 recognizer is scored on labelled Roboflow
+plates, frozen into `data/provisional_test/provisional/`:
+
+- **Every photo of a `glyph_source` car is left out.** Those cars supply the
+  renderer's characters; testing on them would measure memory, not reading.
+- **Results are per car.** Each entry's `group` is its plate text, and near-identical
+  photos of the same car (perceptual hash within 4 bits) are dropped.
+- **Unreadable plates are left out**; they carry no ground truth.
+- Images are copied byte for byte with source, licence and attribution per entry,
+  made read-only and listed in `SHA256SUMS`. `annotate verify` rechecks them, and
+  `freeze` refuses to overwrite an existing set.
+
+Read entries with `load_entries` and images with `entry_image` from
+`alpr.plates.testset` (it applies any rotation tag). These images must never be
+trained on, including in a later detector fine-tuning split.
 
 ### Plate geometry — where each number comes from
 
@@ -244,6 +264,7 @@ alpr/plates/         [phase 2]  the plate domain model
   geometry                      MT-001 in millimetres — single source of truth
   rectify                       4 corners → canonical 192 × 96 crop
   labels                        label storage, items to label, coverage
+  testset                       freeze and verify the provisional test set
   annotate           (CLI)      click-4-corners labelling tool
 tests/                          mirrors the module layout
 data/                           never in version control

@@ -35,7 +35,7 @@ from typing import Any
 
 import numpy as np
 
-from alpr.data_sources.base import Box, PlateType, read_jsonl
+from alpr.data_sources.base import Box, PlateType, Record, read_jsonl
 from alpr.data_sources.own_photos import LABELS_HEADER, LABELS_NAME, Label, read_labels
 from alpr.data_sources.storage import IMAGE_SUFFIXES, DataPaths, atomic_write_text, iter_files
 from alpr.plates.rectify import ROTATIONS, check_quad, load_image
@@ -77,6 +77,7 @@ class Item:
     key: str
     image: Path
     box: Box | None = None
+    record: Record | None = None  # the index record, for provenance; None for own photos
 
     @property
     def size_hint(self) -> float:
@@ -142,7 +143,7 @@ def list_items(paths: DataPaths, source: str, *, order: str = "size") -> list[It
             k = seen[r.image_path]
             seen[r.image_path] += 1
             key = r.image_path if per_image[r.image_path] == 1 else f"{r.image_path}#{k}"
-            items.append(Item(key=key, image=paths.root / r.image_path, box=r.box))
+            items.append(Item(key=key, image=paths.root / r.image_path, box=r.box, record=r))
 
     if order == "size":
         items.sort(key=lambda it: (-it.size_hint, it.key))
