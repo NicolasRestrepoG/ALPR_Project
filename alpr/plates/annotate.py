@@ -35,7 +35,7 @@ import numpy as np
 
 from alpr.data_sources.base import PlateType
 from alpr.data_sources.storage import DataPaths
-from alpr.plates.geometry import CANONICAL_SIZE, MT001, PROVENANCE, PlateGeometry, Provenance
+from alpr.plates.geometry import CANONICAL_SIZE, MT001, PROVENANCE, PlateGeometry
 from alpr.plates.labels import (
     KNOWN_TAGS,
     Item,
@@ -557,9 +557,7 @@ def cmd_measure(args: argparse.Namespace) -> int:
     print(f"{'field':12s} {'MT001':>7s} {'source':>9s} {'median':>7s} {'IQR':>13s} {'n':>4s}")
     for name, values in results.items():
         current = getattr(MT001, name)
-        prov = (
-            PROVENANCE.get(name, Provenance.MEASURED).value if name != "side_margin" else "derived"
-        )
+        prov = PROVENANCE[name].value if name in PROVENANCE else "derived"
         if not values:
             print(f"{name:12s} {current:7.1f} {prov:>9s} {'-':>7s} {'-':>13s} {0:4d}")
             continue
@@ -569,9 +567,9 @@ def cmd_measure(args: argparse.Namespace) -> int:
             f"{q1:6.1f}-{q3:6.1f} {len(values):4d}"
         )
     print(
-        "\nFields marked 'measured' are provisional in alpr/plates/geometry.py. Update them "
-        "from this table once\nat least ~20 frontal plates are labelled; 'spec' fields that "
-        "disagree by more than ~2 mm deserve a closer look."
+        "\nThe 'source' column says where geometry.py's value came from (spec, tape or "
+        "photo).\nIn photos the characters' bottom edge reads ~5 mm low (shadow of the "
+        "embossing), so\nchar_h reads high and muni_gap low; compare top edges instead."
     )
     return 0
 

@@ -21,7 +21,7 @@ def test_spec_values_as_transcribed():
     g = MT001
     assert (g.plate_w, g.plate_h) == (330.0, 160.0)
     assert (g.char_w, g.char_h, g.char_stroke, g.char_gap) == (40.0, 80.0, 10.0, 8.0)
-    assert (g.muni_h, g.muni_char_w, g.muni_stroke, g.muni_spacing) == (22.0, 12.0, 5.0, 5.0)
+    assert (g.muni_h, g.muni_char_w, g.muni_stroke, g.muni_spacing) == (23.0, 12.0, 5.0, 5.0)
     assert g.aspect == pytest.approx(2.0625)
 
 
@@ -118,9 +118,17 @@ def test_every_field_has_a_provenance():
     assert names == set(PROVENANCE)
 
 
-def test_provisional_fields_are_exactly_the_unpublished_ones():
-    measured = {k for k, v in PROVENANCE.items() if v is Provenance.MEASURED}
-    assert measured == {"logo_gutter", "char_top", "muni_gap"}
+def test_non_spec_fields_are_exactly_the_measured_ones():
+    by = {p: {k for k, v in PROVENANCE.items() if v is p} for p in Provenance}
+    assert by[Provenance.TAPE] == {"char_top", "muni_h"}
+    assert by[Provenance.PHOTO] == {"logo_gutter", "muni_gap"}
+
+
+def test_layout_matches_the_real_plate():
+    g = PlateGeometry()
+    assert (g.char_top, g.muni_gap, g.muni_h) == (30.0, 15.0, 23.0)
+    assert g.bottom_margin == pytest.approx(12.0)
+    assert g.side_margin == pytest.approx(15.0)
 
 
 def test_rect_helpers():

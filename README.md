@@ -176,15 +176,20 @@ photograph the same car many times — against the gate of five per character.
 Labels go to `data/labels/<source>.csv` (or `data/raw/own_photos/labels.csv`), in
 full-image pixel coordinates, in the column layout `own_photos` already reads.
 
-### Plate geometry — what is spec and what is provisional
+### Plate geometry — where each number comes from
 
 `alpr/plates/geometry.py` is the single source of truth for plate layout, in
-millimetres. Plate size, character size, stroke, gap and municipality lettering are
-MT-001 as published. The logo gutter and the vertical positions are not in any
-public summary; they are **provisional**, measured from near-frontal photos, and
-marked as such field by field. Once ~20 frontal plates are labelled,
-`annotate measure` reports the measured layout next to the current values — update
-the provisional fields from it before Sprint 2.2's renderer relies on them.
+millimetres, and records the source of every field:
+
+| Source | Fields |
+|---|---|
+| MT-001 as published (confirmed with a tape measure) | plate 330 x 160, characters 40 x 80, stroke, character gap, municipality letter width |
+| Tape measure on a real plate | space above the characters (30), municipality letter height (23) |
+| `annotate measure` on 147 rectified photos | logo gutter (28), gap above the municipality (15) |
+
+In photos the characters' bottom edge reads about 5 mm low, because the embossed
+characters cast a shadow below them. Measure vertical layout from top edges, and
+expect the renderer to need that shadow to look real.
 
 ## Two contracts that cause silent failures if ignored
 

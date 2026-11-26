@@ -4,16 +4,21 @@ Every other module that needs to know where something sits on a plate (the
 rectifier's canvas, the glyph extractor's crop boxes, the renderer) reads it from
 here, in millimetres, and converts to pixels at the last moment with `to_px`.
 
-Two kinds of number live in this file, and they are kept apart on purpose:
+Three kinds of number live in this file, and they are kept apart on purpose:
 
 * **SPEC** — transcribed from MT-001 as published (330 x 160 mm plate, 40 x 80 mm
-  characters, 10 mm stroke, 8 mm character gap, 22 x 12 mm municipality letters).
-* **MEASURED** — layout the published summaries do not give: the logo gutter
-  between the letter and digit groups, and the vertical positions. These are
-  provisional, measured from near-frontal photographs, and must be re-measured from
-  labelled, rectified plates (`annotate measure`) before the renderer is trusted.
-  Sprint 2.2's exit gate — a rendered plate within 2 mm of a real rectified one at
-  every landmark — is what finally settles them.
+  characters, 10 mm stroke, 8 mm character gap, 12 mm municipality letter width).
+  A tape measure on a real plate agreed: 330-334 x 159 mm, characters 79-81 mm
+  tall and 40-41 mm wide.
+* **TAPE** — measured on a real plate where the published summaries are silent or
+  disagree with it: the space above the characters (30 mm) and the municipality
+  letter height (23 mm; the summary says 22, real plates and photos both say 23).
+* **PHOTO** — measured from 147 labelled, rectified photographs (`annotate
+  measure`) where the tape measure was not used: the logo gutter between the letter
+  and digit groups, and the gap above the municipality name. The gap is taken from
+  the municipality's top edge relative to the characters' top edge, because the
+  characters' bottom edge reads about 5 mm low in photos (the embossed characters
+  cast a shadow below them; their top edge matches the tape to 0.5 mm).
 
 `PROVENANCE` records which is which, field by field, and a test keeps it complete.
 
@@ -44,7 +49,8 @@ class GeometryError(ValueError):
 
 class Provenance(StrEnum):
     SPEC = "spec"  # MT-001 as transcribed
-    MEASURED = "measured"  # provisional, from photographs — re-measure before trusting
+    TAPE = "tape"  # measured on a real plate
+    PHOTO = "photo"  # measured from labelled, rectified photographs
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,10 +127,10 @@ class PlateGeometry:
     char_gap: float = 8.0
 
     logo_gutter: float = 28.0
-    char_top: float = 35.0
-    muni_gap: float = 11.0
+    char_top: float = 30.0
+    muni_gap: float = 15.0
 
-    muni_h: float = 22.0
+    muni_h: float = 23.0
     muni_char_w: float = 12.0
     muni_stroke: float = 5.0
     muni_spacing: float = 5.0
@@ -258,7 +264,7 @@ class PlateGeometry:
         return (round(self.plate_w * px_per_mm), round(self.plate_h * px_per_mm))
 
 
-#: Which numbers came from the spec and which are provisional measurements.
+#: Where each number came from: the published spec, a tape measure, or photographs.
 PROVENANCE: dict[str, Provenance] = {
     "plate_w": Provenance.SPEC,
     "plate_h": Provenance.SPEC,
@@ -266,10 +272,10 @@ PROVENANCE: dict[str, Provenance] = {
     "char_h": Provenance.SPEC,
     "char_stroke": Provenance.SPEC,
     "char_gap": Provenance.SPEC,
-    "logo_gutter": Provenance.MEASURED,
-    "char_top": Provenance.MEASURED,
-    "muni_gap": Provenance.MEASURED,
-    "muni_h": Provenance.SPEC,
+    "logo_gutter": Provenance.PHOTO,
+    "char_top": Provenance.TAPE,
+    "muni_gap": Provenance.PHOTO,
+    "muni_h": Provenance.TAPE,
     "muni_char_w": Provenance.SPEC,
     "muni_stroke": Provenance.SPEC,
     "muni_spacing": Provenance.SPEC,
