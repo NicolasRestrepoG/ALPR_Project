@@ -56,12 +56,70 @@ class RectifyError(ValueError):
     """Corners that would produce a garbage homography, or an unreadable image."""
 
 
-def load_image(path: Path | str) -> np.ndarray:
-    """Read an image as RGB uint8, honouring EXIF orientation.
+#: Quarter turns a labeller may apply to stand a sideways photo upright, in degrees
+#: clockwise. Photos that lost their EXIF orientation before publication arrive
+#: sideways; a corner order decided by image position only works on an upright plate.
+ROTATIONS = (0, 90, 180, 270)
+
+_CV_ROTATE = {
+    90: cv2.ROTATE_90_CLOCKWISE,
+    180: cv2.ROTATE_180,
+    270: cv2.ROTATE_90_COUNTERCLOCKWISE,
+}
+
+
+def _check_rotation(degrees: int) -> int:
+    if degrees not in ROTATIONS:
+        raise RectifyError(f"rotation must be one of {ROTATIONS} degrees, got {degrees!r}")
+    return degrees
+
+
+def rotate_image(image: np.ndarray, degrees: int) -> np.ndarray:
+    """Rotate by a quarter turn, clockwise. Lossless: pixels are moved, not resampled."""
+    if _check_rotation(degrees) == 0:
+        return image
+    return cv2.rotate(image, _CV_ROTATE[degrees])
+
+
+def rotate_points(
+    points: Sequence[Sequence[float]], degrees: int, size: tuple[int, int]
+) -> list[tuple[float, float]]:
+    """Map points through `rotate_image(image, degrees)`.
+
+    `size` is (width, height) of the image *before* rotation. Coordinates are
+    continuous, with pixel edges on integers (the convention `rectify` consumes), so
+    a quarter turn is exact: (x, y) -> (h - y, x) for 90 degrees clockwise.
+    """
+    w, h = size
+    deg = _check_rotation(degrees)
+    if deg == 0:
+        return [(float(x), float(y)) for x, y in points]
+    if deg == 90:
+        return [(h - y, float(x)) for x, y in points]
+    if deg == 180:
+        return [(w - x, h - y) for x, y in points]
+    return [(float(y), w - x) for x, y in points]
+
+
+def unrotate_points(
+    points: Sequence[Sequence[float]], degrees: int, size: tuple[int, int]
+) -> list[tuple[float, float]]:
+    """The inverse of `rotate_points`. `size` is still the size *before* rotation."""
+    w, h = size
+    deg = _check_rotation(degrees)
+    rotated_size = (h, w) if deg in (90, 270) else (w, h)
+    return rotate_points(points, (360 - deg) % 360, rotated_size)
+
+
+def load_image(path: Path | str, rotation: int = 0) -> np.ndarray:
+    """Read an image as RGB uint8, honouring EXIF orientation, then turn it upright.
 
     Phone photos store rotation in EXIF. OpenCV applies it on read, and every tool
     in this package reads through this function, so corners clicked in the
     annotation tool and corners consumed by `rectify` live in the same frame.
+    `rotation` is a labeller's correction for photos whose EXIF was stripped before
+    they reached us (see `alpr.plates.labels.rotation_of`); corners stored with such
+    a label are in the rotated, upright frame.
     """
     path = Path(path)
     if not path.is_file():
@@ -69,7 +127,7 @@ def load_image(path: Path | str) -> np.ndarray:
     bgr = cv2.imread(str(path), cv2.IMREAD_COLOR)
     if bgr is None:
         raise RectifyError(f"could not decode image: {path}")
-    return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    return rotate_image(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), rotation)
 
 
 def _dist(a: Sequence[float], b: Sequence[float]) -> float:

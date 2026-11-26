@@ -11,7 +11,17 @@ import pytest
 from alpr.data_sources import base
 from alpr.plates import rectify as rectify_module
 from alpr.plates.geometry import CANONICAL_SIZE
-from alpr.plates.rectify import RectifyError, check_quad, jitter_corners, load_image, rectify
+from alpr.plates.rectify import (
+    ROTATIONS,
+    RectifyError,
+    check_quad,
+    jitter_corners,
+    load_image,
+    rectify,
+    rotate_image,
+    rotate_points,
+    unrotate_points,
+)
 
 from .conftest import SCENE_QUAD, place, quadrant_plate
 
@@ -155,3 +165,37 @@ def test_load_image_errors(tmp_path):
 def test_empty_image_is_refused():
     with pytest.raises(RectifyError):
         rectify(np.zeros((0, 0, 3), np.uint8), SCENE_QUAD)
+
+
+@pytest.mark.parametrize("deg", ROTATIONS)
+def test_rotate_points_follows_the_pixels(deg):
+    """A marked pixel's centre, mapped by rotate_points, lands on the same pixel in
+    the rotated image — and unrotate_points brings it back."""
+    w, h = 7, 4
+    img = np.zeros((h, w, 3), np.uint8)
+    img[1, 5] = 255  # row 1, column 5
+    out = rotate_image(img, deg)
+    ((x, y),) = rotate_points([(5.5, 1.5)], deg, (w, h))
+    assert out[int(y), int(x)].tolist() == [255, 255, 255]
+    assert unrotate_points([(x, y)], deg, (w, h)) == pytest.approx([(5.5, 1.5)])
+
+
+def test_why_turned_photos_must_be_stood_upright(scene_and_quad):
+    """Corners are ordered by image position, so in a turned photo they cannot name the
+    plate's own corners: a sideways plate is refused, an upside-down one comes out
+    upside down. Hence the labeller's rotation, applied before any corner is used."""
+    scene, quad = scene_and_quad
+    size = (scene.shape[1], scene.shape[0])
+    for deg in (90, 270):
+        with pytest.raises(RectifyError, match="aspect"):
+            rectify(rotate_image(scene, deg), rotate_points(quad, deg, size), CANONICAL_SIZE)
+    flat = rectify(rotate_image(scene, 180), rotate_points(quad, 180, size), CANONICAL_SIZE)
+    assert flat[20, 20].tolist() == pytest.approx([0, 0, 255], abs=12)  # blue where red belongs
+
+
+def test_bad_rotation_is_refused(tmp_path):
+    with pytest.raises(RectifyError, match="rotation"):
+        rotate_image(np.zeros((2, 2, 3), np.uint8), 45)
+    path = tmp_path / "a.png"
+    cv2.imwrite(str(path), np.zeros((4, 6, 3), np.uint8))
+    assert load_image(path, 90).shape == (6, 4, 3)

@@ -11,6 +11,10 @@ precise corner clicks, and — as soon as four corners are down — the rectifie
 192 x 96 crop with the MT-001 character cells drawn over it. A rotated, mirrored or
 misaligned preview means a wrong click, and it is visible before the label is saved,
 not three weeks later as a plateau in training.
+
+A photo that arrives sideways (its EXIF orientation stripped before publication) is
+turned upright with the rotate button first; the label then records the turn as a
+`rot90` / `rot180` / `rot270` tag and its corners in the upright frame.
 """
 
 from __future__ import annotations
@@ -44,8 +48,19 @@ from alpr.plates.labels import (
     coverage,
     labels_path,
     list_items,
+    load_labelled_image,
+    rotation_of,
+    with_rotation,
+    without_rotation,
 )
-from alpr.plates.rectify import RectifyError, load_image, rectify
+from alpr.plates.rectify import (
+    ROTATIONS,
+    RectifyError,
+    load_image,
+    rectify,
+    rotate_points,
+    unrotate_points,
+)
 
 DEFAULT_PORT = 8765
 
@@ -98,29 +113,52 @@ class AnnotateApp:
 
     # -- images ------------------------------------------------------------- #
 
-    def _image(self, i: int) -> np.ndarray:
+    def _image(self, i: int, rotation: int = 0) -> np.ndarray:
+        key = (i, rotation)
         with self._lock:
-            if i in self._images:
-                self._images.move_to_end(i)
-                return self._images[i]
-        img = load_image(self.items[i].image)
+            if key in self._images:
+                self._images.move_to_end(key)
+                return self._images[key]
+        img = load_image(self.items[i].image, rotation)
         with self._lock:
-            return self._images.remember(i, img)
+            return self._images.remember(key, img)
 
-    def crop(self, i: int) -> tuple[bytes, dict[str, float]]:
-        """The display JPEG for item `i`, and how display pixels map to the image."""
-        with self._lock:
-            if i in self._crops:
-                return self._crops[i]
-        img = self._image(i)
-        h, w = img.shape[:2]
+    def _box(self, i: int, rotation: int, size: tuple[int, int]) -> tuple[float, ...] | None:
+        """The source's box in the rotated frame, as x1, y1, x2, y2 (rotated + padded)."""
         box = self.items[i].box
         if box is None:
+            return None
+        # `size` is the rotated image's; the box was drawn on the unrotated one.
+        orig = (size[1], size[0]) if rotation in (90, 270) else size
+        pts = rotate_points(
+            [(box.x1, box.y1), (box.x2, box.y1), (box.x2, box.y2), (box.x1, box.y2)],
+            rotation,
+            orig,
+        )
+        xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+        bw, bh = max(xs) - min(xs), max(ys) - min(ys)
+        return (
+            min(xs) - bw * PAD_X,
+            min(ys) - bh * PAD_Y,
+            max(xs) + bw * PAD_X,
+            max(ys) + bh * PAD_Y,
+        )
+
+    def crop(self, i: int, rotation: int = 0) -> tuple[bytes, dict[str, float]]:
+        """The display JPEG for item `i` turned `rotation` degrees clockwise, and how
+        display pixels map to that (rotated) image."""
+        key = (i, rotation)
+        with self._lock:
+            if key in self._crops:
+                return self._crops[key]
+        img = self._image(i, rotation)
+        h, w = img.shape[:2]
+        padded = self._box(i, rotation, (w, h))
+        if padded is None:
             x0, y0, x1, y1 = 0, 0, w, h
         else:
-            px, py = box.width * PAD_X, box.height * PAD_Y
-            x0, y0 = max(0, int(box.x1 - px)), max(0, int(box.y1 - py))
-            x1, y1 = min(w, int(box.x2 + px)), min(h, int(box.y2 + py))
+            x0, y0 = max(0, int(padded[0])), max(0, int(padded[1]))
+            x1, y1 = min(w, int(padded[2])), min(h, int(padded[3]))
         region = img[y0:y1, x0:x1]
         cw, ch = x1 - x0, y1 - y0
         scale = min(DISPLAY_MAX / max(cw, ch), MAX_UPSCALE)
@@ -141,55 +179,82 @@ class AnnotateApp:
             "height": dh,
             "image_w": w,
             "image_h": h,
+            "rotation": rotation,
         }
         with self._lock:
-            return self._crops.remember(i, (buf.tobytes(), meta))
+            return self._crops.remember(key, (buf.tobytes(), meta))
 
     def to_image_coords(
-        self, i: int, points: Sequence[Sequence[float]]
+        self, i: int, points: Sequence[Sequence[float]], rotation: int = 0
     ) -> list[tuple[float, float]]:
-        _, m = self.crop(i)
+        _, m = self.crop(i, rotation)
         return [(m["ox"] + x / m["scale"], m["oy"] + y / m["scale"]) for x, y in points]
 
-    def to_display_coords(self, i: int, points: Sequence[Sequence[float]]) -> list[list[float]]:
-        _, m = self.crop(i)
+    def to_display_coords(
+        self, i: int, points: Sequence[Sequence[float]], rotation: int = 0
+    ) -> list[list[float]]:
+        _, m = self.crop(i, rotation)
         return [[(x - m["ox"]) * m["scale"], (y - m["oy"]) * m["scale"]] for x, y in points]
 
-    def preview(self, i: int, display_points: Sequence[Sequence[float]]) -> bytes:
+    def reframe(
+        self, i: int, points: Sequence[Sequence[float]], src: int, dst: int
+    ) -> list[tuple[float, float]]:
+        """Image-frame points under rotation `src`, re-expressed under rotation `dst`."""
+        if src == dst:
+            return [(float(x), float(y)) for x, y in points]
+        _, m = self.crop(i, src)
+        w, h = int(m["image_w"]), int(m["image_h"])
+        orig = (h, w) if src in (90, 270) else (w, h)
+        return rotate_points(unrotate_points(points, src, orig), dst, orig)
+
+    def preview(
+        self, i: int, display_points: Sequence[Sequence[float]], rotation: int = 0
+    ) -> bytes:
         """Rectified crop at PREVIEW_SCALE, with the MT-001 cells drawn over it."""
-        corners = self.to_image_coords(i, display_points)
-        flat = rectify(self._image(i), corners, CANONICAL_SIZE)
+        corners = self.to_image_coords(i, display_points, rotation)
+        flat = rectify(self._image(i, rotation), corners, CANONICAL_SIZE)
         return encode_jpeg(overlay_geometry(flat, PREVIEW_SCALE))
 
     # -- labels ------------------------------------------------------------- #
 
-    def view(self, i: int) -> dict[str, Any]:
+    def view(self, i: int, rotation: int | None = None) -> dict[str, Any]:
+        """Item `i` as the page shows it. With `rotation` None, the saved label's
+        rotation (or 0); a saved label's corners are re-expressed for the rotation
+        actually shown, so turning a labelled photo keeps its corners on the plate."""
         item = self.items[i]
-        _, meta = self.crop(i)
         label = self.store.get(item.key)
+        saved_rot = rotation_of(label.tags) if label is not None else 0
+        rot = saved_rot if rotation is None else _rotation(rotation)
+        _, meta = self.crop(i, rot)
         out: dict[str, Any] = {
             "index": i,
             "total": len(self.items),
             "key": item.key,
             "crop": meta,
+            "rotation": rot,
             "label": None,
         }
         if label is not None:
+            points = []
+            if label.corners:
+                pts = self.reframe(i, label.corners, saved_rot, rot)
+                points = self.to_display_coords(i, pts, rot)
             out["label"] = {
                 "plate": label.plate or "",
                 "plate_type": label.plate_type.value,
-                "tags": list(label.tags),
-                "points": self.to_display_coords(i, label.corners) if label.corners else [],
+                "tags": without_rotation(label.tags),
+                "points": points,
             }
         return out
 
     def save(self, i: int, payload: dict[str, Any]) -> dict[str, Any]:
         points = payload.get("points") or []
+        rot = _rotation(payload.get("rotation") or 0)
         try:
             plate_type = PlateType(payload.get("plate_type") or "particular")
         except ValueError:
             raise LabelError(f"unknown plate type {payload.get('plate_type')!r}") from None
-        corners = self.to_image_coords(i, points) if points else None
+        corners = self.to_image_coords(i, points, rot) if points else None
         if corners is not None and len(corners) != 4:
             raise LabelError(f"click exactly four corners (got {len(corners)})")
         self.store.put(
@@ -197,7 +262,7 @@ class AnnotateApp:
             plate=payload.get("plate"),
             plate_type=plate_type,
             corners=corners,
-            tags=payload.get("tags") or [],
+            tags=with_rotation(payload.get("tags") or [], rot),
         )
         return self.state()
 
@@ -226,6 +291,16 @@ class AnnotateApp:
                 "missing": cov.missing(),
             },
         }
+
+
+def _rotation(value: Any) -> int:
+    try:
+        deg = int(value)
+    except (TypeError, ValueError):
+        raise LabelError(f"rotation must be one of {ROTATIONS}, got {value!r}") from None
+    if deg not in ROTATIONS:
+        raise LabelError(f"rotation must be one of {ROTATIONS}, got {value!r}")
+    return deg
 
 
 def encode_jpeg(rgb: np.ndarray, quality: int = 92) -> bytes:
@@ -296,30 +371,35 @@ def make_handler(app: AnnotateApp) -> type[BaseHTTPRequestHandler]:
         def do_GET(self) -> None:  # noqa: N802 — http.server API
             url = urlparse(self.path)
             parts = [p for p in url.path.split("/") if p]
+            query = parse_qs(url.query)
             try:
+                raw_rot = (query.get("r") or [None])[0]
+                rot = None if raw_rot is None else _rotation(raw_rot)
                 if not parts:
                     self._send(HTTPStatus.OK, _ui_html(), "text/html; charset=utf-8")
                 elif parts == ["api", "state"]:
                     self._json(app.state())
                 elif len(parts) == 3 and parts[:2] == ["api", "item"]:
                     i = self._index(parts[2])
-                    self._json(app.view(i)) if i is not None else self._error("no such item", 404)
+                    if i is None:
+                        return self._error("no such item", 404)
+                    self._json(app.view(i, rot))
                 elif len(parts) == 3 and parts[:2] == ["api", "crop"]:
                     i = self._index(parts[2])
                     if i is None:
                         return self._error("no such item", 404)
-                    body, _ = app.crop(i)
+                    body, _ = app.crop(i, rot or 0)
                     self._send(HTTPStatus.OK, body, "image/jpeg")
                 elif len(parts) == 3 and parts[:2] == ["api", "preview"]:
                     i = self._index(parts[2])
                     if i is None:
                         return self._error("no such item", 404)
-                    raw = (parse_qs(url.query).get("p") or [""])[0]
+                    raw = (query.get("p") or [""])[0]
                     nums = [float(v) for v in raw.split(",") if v]
                     if len(nums) != 8:
                         return self._error("need four corners")
                     pts = [(nums[k], nums[k + 1]) for k in range(0, 8, 2)]
-                    self._send(HTTPStatus.OK, app.preview(i, pts), "image/jpeg")
+                    self._send(HTTPStatus.OK, app.preview(i, pts, rot or 0), "image/jpeg")
                 else:
                     self._error("not found", 404)
             except (LabelError, RectifyError, ValueError) as exc:
@@ -384,7 +464,7 @@ def contact_sheet(
     rows = -(-len(pairs) // cols)
     sheet = np.full((rows * (tile_h + cap), cols * tile_w, 3), 255, np.uint8)
     for k, (item, lb) in enumerate(pairs):
-        flat = rectify(load_image(item.image), lb.corners, CANONICAL_SIZE)
+        flat = rectify(load_labelled_image(item.image, lb), lb.corners, CANONICAL_SIZE)
         tile = cv2.resize(flat, (tile_w, tile_h), interpolation=cv2.INTER_NEAREST)
         r, c = divmod(k, cols)
         y, x = r * (tile_h + cap), c * tile_w
@@ -548,7 +628,7 @@ def cmd_measure(args: argparse.Namespace) -> int:
     if not pairs:
         print("no labelled particular plates with corners yet", file=sys.stderr)
         return 1
-    samples = [(load_image(item.image), lb.corners) for item, lb in pairs]
+    samples = [(load_labelled_image(item.image, lb), lb.corners) for item, lb in pairs]
     results, skipped = measure_layout(samples)
     print(
         f"measured {len(pairs) - skipped} plates ({skipped} skipped: six clean characters "

@@ -13,7 +13,10 @@ from alpr.plates.labels import (
     coverage,
     labels_path,
     list_items,
+    load_labelled_image,
+    rotation_of,
     validate,
+    with_rotation,
 )
 from alpr.plates.rectify import RectifyError
 
@@ -164,3 +167,40 @@ def test_coverage_counts_distinct_plates_not_images(tmp_path):
     assert cov.char_counts["K"] == 0  # moto plates are not read, so they do not count
     assert cov.by_type == {"particular": 5, "moto": 1}
     assert "A" in cov.missing()
+
+
+def test_rotation_tags():
+    assert rotation_of(["worn"]) == 0
+    assert rotation_of(["rot270", "blurry"]) == 270
+    assert sorted(with_rotation(["rot90", "worn"], 180)) == ["rot180", "worn"]
+    assert with_rotation(["rot90"], 0) == []
+    with pytest.raises(LabelError, match="conflicting"):
+        rotation_of(["rot90", "rot180"])
+    with pytest.raises(LabelError):
+        with_rotation([], 45)
+
+
+def test_store_refuses_two_rotations(tmp_path):
+    store = LabelStore(tmp_path / "labels.csv")
+    with pytest.raises(LabelError, match="conflicting"):
+        store.put(
+            "a.jpg",
+            plate="ABC123",
+            plate_type=PlateType.PARTICULAR,
+            corners=QUAD,
+            tags=["rot90", "rot270"],
+        )
+
+
+def test_load_labelled_image_applies_the_rotation(tmp_path):
+    import cv2
+    import numpy as np
+
+    path = tmp_path / "a.png"
+    cv2.imwrite(str(path), np.zeros((40, 60, 3), np.uint8))
+    store = LabelStore(tmp_path / "labels.csv")
+    lb = store.put(
+        "a.png", plate=None, plate_type=PlateType.NON_PLATE, corners=None, tags=["rot90"]
+    )
+    assert read_labels(store.path)["a.png"].tags == ("rot90",)
+    assert load_labelled_image(path, lb).shape == (60, 40, 3)

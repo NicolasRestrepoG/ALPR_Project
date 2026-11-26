@@ -12,6 +12,13 @@ Where labels live:
                                        several plates
 
 Labels are stored in **full-image pixel coordinates**, never display coordinates.
+
+Sideways photos: a label may carry one rotation tag — `rot90`, `rot180` or `rot270`
+— meaning "turn the image this many degrees clockwise to stand it upright". Its
+corners are in that upright frame. Every consumer therefore reads the image with
+`load_labelled_image` (or `load_image(path, rotation_of(label.tags))`) before using
+the corners. The tag lives in the existing tags column, so the CSV layout Phase 1
+reads is unchanged.
 """
 
 from __future__ import annotations
@@ -26,10 +33,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from alpr.data_sources.base import Box, PlateType, read_jsonl
 from alpr.data_sources.own_photos import LABELS_HEADER, LABELS_NAME, Label, read_labels
 from alpr.data_sources.storage import IMAGE_SUFFIXES, DataPaths, atomic_write_text, iter_files
-from alpr.plates.rectify import check_quad
+from alpr.plates.rectify import ROTATIONS, check_quad, load_image
 
 OWN_PHOTOS = "own_photos"
 
@@ -53,6 +62,9 @@ PLATE_PATTERNS: dict[PlateType, re.Pattern[str]] = {
 
 CHARSET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
+#: Degrees clockwise -> the tag that records it. 0 has no tag.
+ROTATION_TAGS = {deg: f"rot{deg}" for deg in ROTATIONS if deg}
+
 
 class LabelError(ValueError):
     """A label that would not survive being read back, or that cannot be a plate."""
@@ -69,6 +81,32 @@ class Item:
     @property
     def size_hint(self) -> float:
         return self.box.width if self.box else 0.0
+
+
+def rotation_of(tags: Iterable[str]) -> int:
+    """The clockwise quarter turn a label's tags ask for (0 when there is none)."""
+    tags = set(tags)
+    found = [deg for deg, tag in ROTATION_TAGS.items() if tag in tags]
+    if len(found) > 1:
+        raise LabelError(f"conflicting rotation tags: {sorted(ROTATION_TAGS[d] for d in found)}")
+    return found[0] if found else 0
+
+
+def with_rotation(tags: Iterable[str], degrees: int) -> list[str]:
+    """`tags` with any rotation tag replaced by the one for `degrees`."""
+    if degrees not in ROTATIONS:
+        raise LabelError(f"rotation must be one of {ROTATIONS} degrees, got {degrees!r}")
+    out = [t for t in tags if t not in ROTATION_TAGS.values()]
+    return out + [ROTATION_TAGS[degrees]] if degrees else out
+
+
+def without_rotation(tags: Iterable[str]) -> list[str]:
+    return [t for t in tags if t not in ROTATION_TAGS.values()]
+
+
+def load_labelled_image(path: Path | str, label: Label) -> np.ndarray:
+    """The image in the frame the label's corners live in (upright, after rotation)."""
+    return load_image(path, rotation_of(label.tags))
 
 
 def labels_path(paths: DataPaths, source: str) -> Path:
@@ -166,6 +204,7 @@ class LabelStore:
         bad = [t for t in clean_tags if "|" in t or "," in t]
         if bad:
             raise LabelError(f"tags may not contain '|' or ',': {bad}")
+        rotation_of(clean_tags)  # at most one rotation
         with self._lock:
             old = self._labels.get(key)
             label = Label(

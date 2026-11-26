@@ -158,8 +158,9 @@ annotate measure roboflow_proyecto_placas # measure plate layout from labelled p
 ```
 
 The page shows each plate zoomed to its source box. Click the plate's four
-**outer** corners in any order — they are ordered TL/TR/BR/BL by the same helper
-the sources and the rectifier use. A magnifier follows the cursor; drag a corner to
+**outer** corners in any order (the outer edge of the metal, black border included)
+— they are ordered TL/TR/BR/BL by the same helper the sources and the rectifier
+use. A magnifier follows the cursor; drag a corner to
 adjust it. As soon as four corners are down, the rectified 192 × 96 crop appears
 with the MT-001 character cells drawn over it: if it is rotated, mirrored, or the
 characters sit outside their cells, the click is wrong — fix it before saving.
@@ -172,6 +173,14 @@ Tag the sharpest, most frontal plates `glyph_source`: Sprint 2.2 cuts the 36
 characters from them, and they must stay out of the provisional test set. The
 coverage panel counts characters over **distinct** plates — the Roboflow sets
 photograph the same car many times — against the gate of five per character.
+
+Some published photos arrive sideways or upside down (their orientation was lost
+before upload). Corner order is decided by image position, so it only works on an
+upright plate: turn the photo first with **⟳ / ⟲** (`R` / `Shift+R`), then click.
+The turn is saved as a `rot90`, `rot180` or `rot270` tag and the corners are stored
+in the upright frame. Anything that uses a label's corners must therefore read the
+image with `load_labelled_image(path, label)` from `alpr.plates.labels`, which applies the
+turn. A plate that is merely tilted (under ~45°) needs no rotation.
 
 Labels go to `data/labels/<source>.csv` (or `data/raw/own_photos/labels.csv`), in
 full-image pixel coordinates, in the column layout `own_photos` already reads.

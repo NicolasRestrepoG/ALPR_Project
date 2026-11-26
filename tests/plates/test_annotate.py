@@ -23,8 +23,9 @@ from alpr.plates.annotate import (
 )
 from alpr.plates.geometry import PlateGeometry
 from alpr.plates.labels import LabelError, labels_path
+from alpr.plates.rectify import RectifyError, rotate_image, rotate_points
 
-from .conftest import SCENE_QUAD, draw_plate, place, quadrant_plate
+from .conftest import SCENE_QUAD, SCENE_SIZE, draw_plate, place, quadrant_plate
 
 
 @pytest.fixture
@@ -201,3 +202,78 @@ def test_plates_package_imports_no_ml_framework():
     )
     proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+@pytest.fixture
+def sideways(tmp_path):
+    """A photo stored turned 90 degrees anticlockwise (EXIF lost): it needs a 90-degree
+    clockwise turn to stand upright. The source's box is in the stored frame."""
+    paths = DataPaths(tmp_path).ensure()
+    img_path = paths.raw("rf") / "side.png"
+    img_path.parent.mkdir(parents=True)
+    stored = rotate_image(place(quadrant_plate()), 270)
+    cv2.imwrite(str(img_path), cv2.cvtColor(stored, cv2.COLOR_RGB2BGR))
+    quad = rotate_points(SCENE_QUAD, 270, SCENE_SIZE)
+    xs, ys = [p[0] for p in quad], [p[1] for p in quad]
+    rec = Record(
+        source="rf",
+        image_path="raw/rf/side.png",
+        license_key="cc-by-4.0",
+        box=Box(min(xs), min(ys), max(xs), max(ys)),
+    )
+    write_jsonl(paths.index("rf"), [rec])
+    return paths, quad
+
+
+def test_sideways_plate_is_refused_until_the_photo_is_turned(sideways):
+    paths, stored_quad = sideways
+    app = AnnotateApp(paths, "rf")
+    with pytest.raises(RectifyError, match="aspect"):
+        app.save(0, {"points": app.to_display_coords(0, stored_quad), "plate": "ABC123"})
+
+    shown = app.to_display_coords(0, SCENE_QUAD, rotation=90)
+    app.save(0, {"points": shown, "plate": "ABC123", "rotation": 90, "tags": ["worn"]})
+    lb = read_labels(labels_path(paths, "rf"))["raw/rf/side.png"]
+    assert lb.tags == ("rot90", "worn")
+    assert np.allclose(lb.corners, SCENE_QUAD, atol=0.01)  # corners in the upright frame
+
+    # The sheet honours the tag: upright tile, red top-left, blue bottom-right.
+    sheet = contact_sheet(paths, "rf", n=1, cols=1)
+    assert tuple(sheet[40, 40]) == pytest.approx((255, 0, 0), abs=12)
+    assert tuple(sheet[150, 340]) == pytest.approx((0, 0, 255), abs=12)
+
+
+def test_view_reopens_rotated_and_keeps_corners_when_turned_again(sideways):
+    paths, stored_quad = sideways
+    app = AnnotateApp(paths, "rf")
+    app.save(
+        0, {"points": app.to_display_coords(0, SCENE_QUAD, 90), "plate": "ABC123", "rotation": 90}
+    )
+    view = app.view(0)
+    assert view["rotation"] == 90 and view["label"]["tags"] == []
+    assert np.allclose(app.to_image_coords(0, view["label"]["points"], 90), SCENE_QUAD, atol=0.05)
+    back = app.view(0, 0)  # shown unturned: the same corners, in the stored frame
+    assert np.allclose(app.to_image_coords(0, back["label"]["points"], 0), stored_quad, atol=0.05)
+
+
+def test_http_rotation_parameter(sideways):
+    paths, _ = sideways
+    app = AnnotateApp(paths, "rf")
+    server = make_server(app, port=0)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        _, ctype, body = _get(base + "/api/crop/0.jpg?r=90")
+        assert ctype == "image/jpeg"
+        upright = cv2.imdecode(np.frombuffer(body, np.uint8), cv2.IMREAD_COLOR)
+        _, _, body = _get(base + "/api/crop/0.jpg?r=0")
+        stored = cv2.imdecode(np.frombuffer(body, np.uint8), cv2.IMREAD_COLOR)
+        assert upright.shape[1] > upright.shape[0] and stored.shape[0] > stored.shape[1]
+        _, _, body = _get(base + "/api/item/0?r=270")
+        assert json.loads(body)["rotation"] == 270
+        with pytest.raises(urllib.error.HTTPError) as err:
+            _get(base + "/api/crop/0.jpg?r=45")
+        assert err.value.code == 400
+    finally:
+        server.shutdown()
+        server.server_close()

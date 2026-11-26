@@ -49,6 +49,7 @@
   .help { color: var(--muted); font-size: 12px; }
   .help kbd { background: #0e1012; border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; color: var(--text); }
   .key { color: var(--muted); font-size: 12px; word-break: break-all; }
+  .rot { color: var(--accent); font-size: 12px; min-height: 16px; }
 </style>
 </head>
 <body>
@@ -63,6 +64,7 @@
   <section>
     <div id="stage"><canvas id="canvas"></canvas></div>
     <div class="key" id="key"></div>
+    <div class="rot" id="rotNote"></div>
   </section>
   <aside>
     <div class="card">
@@ -89,6 +91,8 @@
         <button id="prev">← Prev</button>
         <button id="next">Next →</button>
         <button id="nextOpen">Next unlabelled</button>
+        <button id="rotateL" title="Turn the photo 90° anticlockwise (Shift+R)">⟲</button>
+        <button id="rotate" title="Turn the photo 90° clockwise (R)">⟳ Rotate photo</button>
         <button id="clear">Clear corners</button>
         <button id="del">Delete label</button>
       </div>
@@ -101,7 +105,8 @@
     <div class="help">
       <kbd>click</kbd> add corner · <kbd>drag</kbd> move corner · <kbd>⌫</kbd> remove last ·
       <kbd>⏎</kbd> save &amp; next · <kbd>←</kbd>/<kbd>→</kbd> prev/next (outside the text box) ·
-      <kbd>Esc</kbd> leave the text box · <kbd>1</kbd>–<kbd>5</kbd> type
+      <kbd>Esc</kbd> leave the text box · <kbd>1</kbd>–<kbd>5</kbd> type ·
+      <kbd>R</kbd> / <kbd>Shift+R</kbd> turn a sideways photo clockwise / anticlockwise (before clicking corners)
     </div>
   </aside>
 </main>
@@ -113,7 +118,7 @@ const $ = id => document.getElementById(id);
 const canvas = $("canvas"), ctx = canvas.getContext("2d");
 const loupe = $("loupe"), lctx = loupe.getContext("2d");
 let state = null, item = null, img = new Image(), points = [], plateType = "particular",
-    tags = new Set(), dragging = -1, previewTimer = null;
+    tags = new Set(), dragging = -1, previewTimer = null, rotation = 0;
 
 async function api(path, body) {
   const opts = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
@@ -148,17 +153,23 @@ function syncChips() {
   document.querySelectorAll("[data-tag]").forEach(el => el.classList.toggle("on", tags.has(el.dataset.tag)));
 }
 
-async function load(i) {
-  item = await api(`/api/item/${i}`);
+// `rot` null: show the photo as its saved label says. `keepForm`: a rotation of the
+// photo on screen — keep what was typed, take corners from the saved label only.
+async function load(i, rot = null, keepForm = false) {
+  item = await api(`/api/item/${i}` + (rot === null ? "" : `?r=${rot}`));
+  rotation = item.rotation;
   $("pos").textContent = `#${i + 1} of ${item.total}`;
   $("key").textContent = item.key + (state.done[i] ? "  ✓ labelled" : "");
+  $("rotNote").textContent = rotation ? `photo turned ${rotation}° clockwise — saved with the label` : "";
   const lb = item.label;
   points = lb ? lb.points.map(p => p.slice()) : [];
-  $("plate").value = lb ? lb.plate : "";
-  plateType = lb ? lb.plate_type : "particular";
-  tags = new Set(lb ? lb.tags : []);
+  if (!keepForm) {
+    $("plate").value = lb ? lb.plate : "";
+    plateType = lb ? lb.plate_type : "particular";
+    tags = new Set(lb ? lb.tags : []);
+  }
   syncChips();
-  await new Promise((ok, bad) => { img.onload = ok; img.onerror = bad; img.src = `/api/crop/${i}.jpg?t=${Date.now()}`; });
+  await new Promise((ok, bad) => { img.onload = ok; img.onerror = bad; img.src = `/api/crop/${i}.jpg?r=${rotation}&t=${Date.now()}`; });
   canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
   draw(); updatePreview();
   say("");
@@ -237,7 +248,7 @@ function updatePreview() {
   }
   previewTimer = setTimeout(async () => {
     const q = points.flat().map(v => v.toFixed(2)).join(",");
-    const res = await fetch(`/api/preview/${item.index}?p=${q}`);
+    const res = await fetch(`/api/preview/${item.index}?p=${q}&r=${rotation}`);
     if (res.ok) {
       $("preview").src = URL.createObjectURL(await res.blob());
       $("previewNote").textContent = "Upright, not mirrored, plate edges at the frame? Characters inside the cells?";
@@ -251,7 +262,7 @@ function updatePreview() {
 async function save() {
   try {
     state = await api(`/api/label/${item.index}`, {
-      points, plate: $("plate").value, plate_type: plateType, tags: [...tags] });
+      points, plate: $("plate").value, plate_type: plateType, tags: [...tags], rotation });
     renderState();
     say(`saved ${item.key}`, "ok");
     const next = state.done.findIndex((d, k) => !d && k > item.index);
@@ -270,6 +281,14 @@ $("prev").onclick = () => load(Math.max(0, item.index - 1));
 $("next").onclick = () => load(Math.min(state.total - 1, item.index + 1));
 $("nextOpen").onclick = () => { const n = state.done.findIndex((d, k) => !d && k > item.index); load(n >= 0 ? n : state.first_open); };
 $("clear").onclick = () => { points = []; draw(); updatePreview(); };
+
+async function rotate(step = 90) {
+  const unsaved = points.length && !(item.label && item.label.points.length);
+  await load(item.index, (rotation + step + 360) % 360, true);
+  if (unsaved) say("Corners cleared — click them again on the upright photo.", "err");
+}
+$("rotate").onclick = () => rotate(90).catch(e => say(e.message, "err"));
+$("rotateL").onclick = () => rotate(-90).catch(e => say(e.message, "err"));
 $("del").onclick = del;
 
 document.addEventListener("keydown", ev => {
@@ -280,6 +299,7 @@ document.addEventListener("keydown", ev => {
   if (ev.key === "Backspace") { ev.preventDefault(); points.pop(); draw(); updatePreview(); }
   else if (ev.key === "ArrowLeft") load(Math.max(0, item.index - 1));
   else if (ev.key === "ArrowRight") load(Math.min(state.total - 1, item.index + 1));
+  else if (ev.key === "r" || ev.key === "R") rotate(ev.shiftKey ? -90 : 90).catch(e => say(e.message, "err"));
   else { const t = MAIN_TYPES.find(([, k]) => k === ev.key); if (t) { plateType = t[0]; syncChips(); } }
 });
 
