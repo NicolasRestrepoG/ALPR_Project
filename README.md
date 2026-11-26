@@ -9,7 +9,7 @@ run what currently exists.
 **Status: Phase 1 complete; Phase 2 in progress (Sprint 2.2).** `data_sources`
 has all eleven sources registered, licence-audited and reachable through one
 command. `plates` has the MT-001 geometry, rectification, the `annotate`
-labelling tool, and a frozen provisional test set. Nothing else exists yet, deliberately — one phase creates one
+labelling tool, a frozen provisional test set, and the 36 extracted glyphs. Nothing else exists yet, deliberately — one phase creates one
 module, and nothing is scaffolded ahead.
 
 Own photographs are deferred until just before Phase 5. Until then, the glyph
@@ -157,6 +157,7 @@ annotate sheet roboflow_proyecto_placas   # contact sheet of rectified crops
 annotate measure roboflow_proyecto_placas # measure plate layout from labelled plates
 annotate freeze roboflow_proyecto_placas roboflow_placas_colombia_itm   # freeze the test set
 annotate verify                           # recheck the frozen set's checksums
+annotate glyphs roboflow_proyecto_placas roboflow_placas_colombia_itm   # extract the 36 glyphs
 ```
 
 The page shows each plate zoomed to its source box. Click the plate's four
@@ -204,6 +205,23 @@ plates, frozen into `data/provisional_test/provisional/`:
 Read entries with `load_entries` and images with `entry_image` from
 `alpr.plates.testset` (it applies any rotation tag). These images must never be
 trained on, including in a later detector fine-tuning split.
+
+### The glyphs — `annotate glyphs`
+
+The plate typeface is not published, so the renderer's characters are cut from
+plates tagged `glyph_source`. Each character is rebuilt from **all** its
+instances, one photo per car (the sharpest): the crops are rectified at 4 px/mm,
+masked to the character's own ink, aligned to each other and median-combined, so
+blur, glare and dirt that differ between photos cancel out.
+
+Output goes to `data/assets/glyphs/`: one PNG per character plus `logo.png`
+(255 = ink), `glyphs.json` with the source cars, confidence and measured ink size
+of each, and `qa_sheet.png` with each glyph beside its source crops. Glyphs from
+fewer than three cars are marked `low`; replace them from the own close-ups. Read
+glyphs with `load_glyphs` from `alpr.plates.glyphs`.
+
+Glyphs are stored as photographed: their ink is ~6% taller than the 80 mm cell
+(the embossing seen from above). Scaling them into the cell is the renderer's job.
 
 ### Plate geometry — where each number comes from
 
@@ -265,6 +283,7 @@ alpr/plates/         [phase 2]  the plate domain model
   rectify                       4 corners → canonical 192 × 96 crop
   labels                        label storage, items to label, coverage
   testset                       freeze and verify the provisional test set
+  glyphs                        extract the 36 characters + logo from labelled plates
   annotate           (CLI)      click-4-corners labelling tool
 tests/                          mirrors the module layout
 data/                           never in version control

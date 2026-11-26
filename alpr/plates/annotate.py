@@ -6,6 +6,7 @@
     annotate measure <source>   measure the plate layout from labelled, rectified plates
     annotate freeze <source>... freeze the provisional test set (glyph-source cars excluded)
     annotate verify             recheck a frozen test set against its checksums
+    annotate glyphs <source>... extract the 36 characters and the logo from glyph_source plates
 
 The page is served by the standard library on 127.0.0.1 and talks to nothing else.
 It shows each plate zoomed to the source's box when there is one, a magnifier for
@@ -42,6 +43,7 @@ import numpy as np
 from alpr.data_sources.base import PlateType
 from alpr.data_sources.storage import DataPaths
 from alpr.plates.geometry import CANONICAL_SIZE, MT001, PROVENANCE, PlateGeometry
+from alpr.plates.glyphs import find_characters
 from alpr.plates.labels import (
     KNOWN_TAGS,
     Item,
@@ -518,17 +520,8 @@ def measure_layout(
             cv2.GaussianBlur(gray, (5, 5), 0), 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
         )
         _, _, stats, _ = cv2.connectedComponentsWithStats(th)
-        blobs = [
-            s
-            for s in stats[1:]
-            if 55 * px < s[3] < 100 * px and 3 * px < s[2] < 60 * px and 5 * px < s[1] < 75 * px
-        ]
-        if len(blobs) < 6:
-            skipped += 1
-            continue
-        hmed = statistics.median(s[3] for s in blobs)
-        chars = sorted((s for s in blobs if abs(s[3] - hmed) < 0.08 * hmed), key=lambda s: s[0])
-        if len(chars) != 6:
+        chars = find_characters(gray, px)
+        if chars is None:
             skipped += 1
             continue
         tops = [s[1] / px for s in chars]
@@ -686,6 +679,25 @@ def cmd_verify(args: argparse.Namespace) -> int:
     return 1 if problems else 0
 
 
+def cmd_glyphs(args: argparse.Namespace) -> int:
+    from alpr.plates.glyphs import extract, write
+
+    paths = DataPaths.default()
+    glyphs, logo, skipped = extract(paths, args.sources)
+    out = write(paths, glyphs, logo, args.sources)
+    print(f"{len(glyphs)} of 36 glyphs{' + logo' if logo else ''} written to {out}")
+    if skipped:
+        print(f"{skipped} glyph-source plate(s) skipped: six clean characters not isolated")
+    low = sorted(c for c, g in glyphs.items() if g.confidence == "low")
+    if low:
+        print(f"low confidence (fewer than 3 cars): {' '.join(low)}")
+    missing = [c for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" if c not in glyphs]
+    if missing:
+        print(f"missing: {' '.join(missing)} — tag more plates glyph_source")
+    print(f"check {out / 'qa_sheet.png'} — each glyph beside its source crops")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="annotate", description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -728,6 +740,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("sources", nargs="+", help="labelled sources to draw from")
     p.add_argument("--name", default="provisional", help="set name (default provisional)")
     p.set_defaults(func=cmd_freeze)
+
+    p = sub.add_parser("glyphs", help="extract the 36 characters from glyph_source plates")
+    p.add_argument("sources", nargs="+", help="labelled sources to draw from")
+    p.set_defaults(func=cmd_glyphs)
 
     p = sub.add_parser("verify", help="recheck a frozen test set")
     p.add_argument("--name", default="provisional")
