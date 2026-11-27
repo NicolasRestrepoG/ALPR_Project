@@ -18,9 +18,16 @@ from typing import Any
 import cv2
 import numpy as np
 
+from alpr.plates.geometry import MT001
 from alpr.plates.render import SLOT_CENTRES_MM
 
-PX = 4.0
+PLATE_W_MM = MT001.plate_w
+
+
+def _px(plate: np.ndarray) -> float:
+    """Pixels per mm of a full-plate image, whatever resolution it was rendered at."""
+    return plate.shape[1] / PLATE_W_MM
+
 
 BOLT_TONES = {"chrome": (196, 196, 202), "black": (38, 38, 40), "rusty": (122, 84, 52)}
 FRAME_TONES = {"chrome": (205, 205, 212), "black": (28, 28, 30), "white": (236, 236, 236)}
@@ -37,12 +44,13 @@ def bolts(
     plate: np.ndarray, specs: tuple[dict[str, Any], ...] | list[dict[str, Any]]
 ) -> np.ndarray:
     """Domed bolt heads at the mounting slots, lit from the top-left, with a slot."""
+    px = _px(plate)
     out = plate.copy()
     h, w = out.shape[:2]
     for b in specs:
         sx, sy = SLOT_CENTRES_MM[b["slot"]]
-        cx, cy = (sx + b["dx_mm"]) * PX, (sy + b["dy_mm"]) * PX
-        r = b["radius_mm"] * PX
+        cx, cy = (sx + b["dx_mm"]) * px, (sy + b["dy_mm"]) * px
+        r = b["radius_mm"] * px
         x0, y0 = max(0, int(cx - r - 2)), max(0, int(cy - r - 2))
         x1, y1 = min(w, int(cx + r + 3)), min(h, int(cy + r + 3))
         if x1 <= x0 or y1 <= y0:
@@ -80,11 +88,12 @@ def frame(
 ) -> np.ndarray:
     """A decorative frame: a rounded-rect annulus over the plate's edge, often with a
     thicker bottom bar carrying dealer text over the municipality strip."""
+    px = _px(plate)
     out = plate.copy()
     h, w = out.shape[:2]
-    t = spec["thickness_mm"] * PX
-    bottom = t + spec.get("bottom_extra_mm", 0.0) * PX
-    inner = _rounded_rect_mask(w, h, t, t, w - t, h - bottom, spec["radius_mm"] * PX)
+    t = spec["thickness_mm"] * px
+    bottom = t + spec.get("bottom_extra_mm", 0.0) * px
+    inner = _rounded_rect_mask(w, h, t, t, w - t, h - bottom, spec["radius_mm"] * px)
     ring = (1 - inner).astype(np.float32)
     ring = cv2.GaussianBlur(ring, (3, 3), 0.7)[..., None]
     base = np.asarray(FRAME_TONES[spec["material"]], np.float32)
@@ -92,11 +101,11 @@ def frame(
     tone = np.broadcast_to(base, out.shape) * shade
     res = tone * ring + out.astype(np.float32) * (1 - ring)
     out = np.clip(res, 0, 255).astype(np.uint8)
-    if spec.get("text") and bottom >= 9 * PX:
+    if spec.get("text") and bottom >= 9 * px:
         rng = rng or np.random.default_rng(0)
         text = str(rng.choice(FRAME_TEXTS))
         ink = (20, 20, 20) if spec["material"] != "black" else (225, 225, 225)
-        scale = (bottom - 2 * PX) / 30.0
+        scale = (bottom - 2 * px) / 30.0
         (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, max(1, int(scale * 2)))
         org = (int((w - tw) / 2), int(h - (bottom - th) / 2))
         cv2.putText(
@@ -117,15 +126,20 @@ def value_noise(
 ) -> np.ndarray:
     """Smooth fractal noise in [0, 1] (a cheap stand-in for Perlin)."""
     h, w = shape
-    acc = np.zeros((h, w), np.float32)
+    # Built at quarter resolution (it is smooth at every scale used), then enlarged.
+    q = 4 if scale_px >= 16 else 1
+    sh, sw = max(1, h // q), max(1, w // q)
+    acc = np.zeros((sh, sw), np.float32)
     amp, total = 1.0, 0.0
     for o in range(octaves):
-        s = max(2.0, scale_px / (2**o))
-        grid = rng.random((int(h / s) + 3, int(w / s) + 3)).astype(np.float32)
-        acc += amp * cv2.resize(grid, (w, h), interpolation=cv2.INTER_CUBIC)
+        s = max(2.0, scale_px / q / (2**o))
+        grid = rng.random((int(sh / s) + 3, int(sw / s) + 3)).astype(np.float32)
+        acc += amp * cv2.resize(grid, (sw, sh), interpolation=cv2.INTER_CUBIC)
         total += amp
         amp *= 0.5
     acc /= total
+    if q > 1:
+        acc = cv2.resize(acc, (w, h), interpolation=cv2.INTER_LINEAR)
     return (acc - acc.min()) / max(float(acc.max() - acc.min()), 1e-6)
 
 
@@ -133,10 +147,11 @@ def dirt(plate: np.ndarray, spec: dict[str, Any], rng: np.random.Generator) -> n
     """Grime (broad, soft, partly transparent) or spatter (fine specks), covering
     ~`coverage` of the plate. Grime darkens and browns the sheet in smudges; it is
     not the hard-edged spots a single threshold gives."""
+    px = _px(plate)
     cov = float(spec["coverage"])
     if cov <= 0:
         return plate
-    n = value_noise(plate.shape[:2], spec["scale_mm"] * PX, rng)
+    n = value_noise(plate.shape[:2], spec["scale_mm"] * px, rng)
     thresh = float(np.quantile(n, 1.0 - cov))
     soft = 0.25 if spec.get("kind", "grime") == "grime" else 0.03
     a = np.clip((n - thresh) / soft, 0.0, 1.0) * float(spec.get("opacity", 0.85))
@@ -149,13 +164,14 @@ def wear(
     plate: np.ndarray, spec: dict[str, Any], rng: np.random.Generator, sheet_rgb: tuple[int, ...]
 ) -> np.ndarray:
     """Worn paint: the ink fades towards the sheet colour in patches, as on old plates."""
+    px = _px(plate)
     amount = float(spec["amount"])
     if amount <= 0:
         return plate
     f = plate.astype(np.float32)
     lum = f @ np.array([0.3, 0.6, 0.1], np.float32)
     ink = np.clip((140.0 - lum) / 80.0, 0.0, 1.0)  # how ink-like each pixel is
-    n = value_noise(plate.shape[:2], spec["scale_mm"] * PX, rng)
+    n = value_noise(plate.shape[:2], spec["scale_mm"] * px, rng)
     a = (ink * np.clip(n * 1.6 - 0.4, 0.0, 1.0) * amount)[..., None]
     sheet = np.asarray(sheet_rgb, np.float32) * 0.8  # faded paint, not clean sheet
     return np.clip(f * (1 - a) + sheet * a, 0, 255).astype(np.uint8)
@@ -185,7 +201,8 @@ def grille(
         if y1 <= y0 or rows.shape[0] != (y1 - y0):
             continue
         shade = np.linspace(1.1, 0.75, y1 - y0, dtype=np.float32)[:, None, None]
-        out[y0:y1] = np.clip(rows * shade, 0.0, 1.0)
+        top_value = 255.0 if out.dtype == np.uint8 else 1.0
+        out[y0:y1] = np.clip(rows.astype(np.float32) * shade, 0.0, top_value).astype(out.dtype)
     return out
 
 

@@ -75,3 +75,20 @@ def test_severity_zero_crop_matches_the_clean_plate(syn, renderer):
     assert s.params.text == "KDQ742"
     g = s.crop.astype(float) @ [0.3, 0.6, 0.1]
     assert g[:, 10:60].min() < 80 and np.median(g) > 100  # dark glyphs on a light sheet
+
+
+@pytest.mark.parametrize("plate_px", [70, 100, 165, 200, 260])
+def test_render_resolution_keeps_4x_oversampling(plate_px):
+    from alpr.synth.pipeline import OVERSAMPLE, render_scale
+
+    px = render_scale(plate_px)
+    assert 330 * px >= OVERSAMPLE * plate_px or px == 4.0
+
+
+def test_renderer_at_another_resolution_is_cached_and_scaled(renderer):
+    half = renderer.at(2.0)
+    assert half is renderer.at(2.0) and renderer.at(renderer.px) is renderer
+    from alpr.plates.render import PlateSpec
+
+    img = half.render(PlateSpec("ABC123"))
+    assert img.shape == (320, 660, 3)

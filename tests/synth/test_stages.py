@@ -52,15 +52,15 @@ def test_roll_tilts_the_top_edge():
 # -- 2 composite -------------------------------------------------------------- #
 
 
-def test_composite_obeys_alpha_and_returns_unit_floats():
+def test_composite_obeys_alpha():
     fg = np.full((10, 10, 3), 255, np.uint8)
     bg = np.zeros((10, 10, 3), np.uint8)
     a = np.zeros((10, 10), np.float32)
     a[:, 5:] = 1.0
     a[:, 4] = 0.5
     out = composite(fg, a, bg)
-    assert out.dtype == np.float32 and out.min() >= 0 and out.max() <= 1
-    assert out[0, 0, 0] == 0 and out[0, 9, 0] == 1 and out[0, 4, 0] == pytest.approx(0.5)
+    assert out.dtype == np.uint8
+    assert out[0, 0, 0] == 0 and out[0, 9, 0] == 255 and out[0, 4, 0] == pytest.approx(128, abs=1)
     with pytest.raises(ValueError):
         composite(fg, a[:5], bg)
 

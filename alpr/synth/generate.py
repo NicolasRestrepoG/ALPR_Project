@@ -1,12 +1,13 @@
 """`generate` — the Phase 3 command.
 
-    generate backgrounds    build the vehicle-front background corpus (test set excluded)
-    generate demo           contact sheet: rows from severity 0 (clean) to 1 (barely readable)
-    generate compare        20 synthetic + 20 real crops, shuffled and numbered, with a key:
-                            the Sprint 3.1 check — if you can sort them at a glance, the
-                            gap is visible, and therefore learnable
+generate backgrounds    build the vehicle-front background corpus (test set excluded)
+generate demo           contact sheet: rows from severity 0 (clean) to 1 (barely readable)
+generate compare        20 synthetic + 20 real crops, shuffled and numbered, with a key:
+                        the Sprint 3.1 check — if you can sort them at a glance, the
+                        gap is visible, and therefore learnable
 
-Sprint 3.2 adds `generate corpus`.
+generate corpus         the training corpus: spec → hash → data/corpus/<hash>/
+generate ablation       four corpora differing only in stage order (Sprint 3.2)
 """
 
 from __future__ import annotations
@@ -135,6 +136,45 @@ def cmd_compare(args: argparse.Namespace) -> int:
     return 0
 
 
+GATE_SECONDS = 15 * 60
+GATE_SPREAD = 0.15
+
+
+def _print_report(rep, label: str = "") -> None:
+    state = "reused (already built)" if rep.reused else f"built in {rep.seconds:.0f} s"
+    print(f"{label}corpus {rep.hash}: {rep.size} samples, {state}")
+    print(f"  {rep.path}")
+    if not rep.reused:
+        print(f"  {rep.samples_per_s:.0f} samples/s on {rep.workers} workers")
+    print("  classes: " + ", ".join(f"{k} {v}" for k, v in sorted(rep.class_counts.items())))
+    print(f"  glyph spread: letters {rep.letter_spread:.1%}, digits {rep.digit_spread:.1%}")
+
+
+def cmd_corpus(args: argparse.Namespace) -> int:
+    from alpr.synth.corpus import CorpusSpec, build_corpus
+
+    spec = CorpusSpec(size=args.size, seed=args.seed, order=args.order)
+    rep = build_corpus(DataPaths.default(), spec, workers=args.workers, force=args.force)
+    _print_report(rep)
+    ok_time = rep.reused or rep.seconds < GATE_SECONDS * rep.size / 20_000
+    ok_spread = max(rep.letter_spread, rep.digit_spread) <= GATE_SPREAD
+    verdict = {True: "PASS", False: "FAIL"}
+    print(f"gates: time {verdict[ok_time]}, glyph spread {verdict[ok_spread]}")
+    return 0 if ok_time and ok_spread else 1
+
+
+def cmd_ablation(args: argparse.Namespace) -> int:
+    from alpr.synth.corpus import CorpusSpec, build_corpus
+    from alpr.synth.pipeline import ORDERS
+
+    paths = DataPaths.default()
+    for order in ORDERS:
+        spec = CorpusSpec(size=args.size, seed=args.seed, order=order)
+        _print_report(build_corpus(paths, spec, workers=args.workers), f"[{order}] ")
+    print("train each for 8 epochs in Phase 4; the correct order must win by >= 3 points")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="generate", description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -152,6 +192,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--out")
     p.set_defaults(func=cmd_demo)
+
+    p = sub.add_parser("corpus", help="build (or reuse) a training corpus")
+    p.add_argument("--size", type=int, default=20_000)
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--order", default="correct", help="stage order (ablation only)")
+    p.add_argument("--workers", type=int, default=None)
+    p.add_argument("--force", action="store_true", help="rebuild even if it exists")
+    p.set_defaults(func=cmd_corpus)
+
+    p = sub.add_parser("ablation", help="four corpora, one per stage order")
+    p.add_argument("--size", type=int, default=20_000)
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--workers", type=int, default=None)
+    p.set_defaults(func=cmd_ablation)
 
     p = sub.add_parser("compare", help="shuffled synthetic vs real crops, with a key")
     p.add_argument("-n", type=int, default=20)

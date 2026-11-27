@@ -48,9 +48,12 @@ def plain_background(size: tuple[int, int], rng: np.random.Generator) -> np.ndar
 
 
 def composite(plate: np.ndarray, alpha: np.ndarray, background: np.ndarray) -> np.ndarray:
-    """plate over background. uint8 RGB in, float32 RGB in [0, 1] out."""
+    """plate over background, uint8 in and out.
+
+    uint8 is enough here: the downsample that follows averages many render pixels
+    into each output pixel, and blending in uint8 (OpenCV's SIMD path) is what keeps
+    full-resolution compositing affordable at corpus scale."""
     if plate.shape != background.shape or plate.shape[:2] != alpha.shape:
         raise ValueError(f"shapes differ: {plate.shape} {alpha.shape} {background.shape}")
-    a = alpha[..., None]
-    out = plate.astype(np.float32) * a + background.astype(np.float32) * (1.0 - a)
-    return out / 255.0
+    a = np.ascontiguousarray(alpha, np.float32)
+    return cv2.blendLinear(plate, background, a, 1.0 - a)

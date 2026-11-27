@@ -3,6 +3,10 @@
 After blur, so neighbouring pixels stay uncorrelated: correlated noise is a strong,
 learnable synthetic signature. `shot_peak` is the photon count a white pixel
 collects; fewer photons (dark scenes, small apertures) mean relatively more noise.
+
+Shot noise uses the Gaussian approximation of the Poisson distribution (same mean
+and variance, lambda), which is accurate at the photon counts sampled here (a mid
+grey collects >= 50) and several times faster to draw.
 """
 
 from __future__ import annotations
@@ -15,7 +19,8 @@ def noise(
 ) -> np.ndarray:
     out = image.astype(np.float32)
     if shot_peak < 1e8:
-        photons = rng.poisson(np.clip(out, 0, None) * shot_peak).astype(np.float32)
+        lam = np.clip(out, 0, None) * np.float32(shot_peak)
+        photons = lam + np.sqrt(lam) * rng.standard_normal(out.shape, dtype=np.float32)
         out = photons / np.float32(shot_peak)
     if read_sigma > 0:
         out = out + rng.normal(0.0, read_sigma, out.shape).astype(np.float32)

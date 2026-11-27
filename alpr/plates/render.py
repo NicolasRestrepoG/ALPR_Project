@@ -39,6 +39,7 @@ from alpr.plates.glyphs import load_glyphs, load_manifest
 from alpr.plates.labels import CHARSET, LabelError
 
 PX = float(RENDER_PX_PER_MM)
+GLYPH_PX = 4.0  # resolution the glyph images are stored at (alpr.plates.glyphs)
 Color = tuple[int, int, int]
 
 #: Painted, raised border along the plate edge (photographed; provisional).
@@ -157,20 +158,29 @@ class PlateRenderer:
         glyphs: dict[str, np.ndarray],
         origins: dict[str, tuple[float, float]],
         geometry: PlateGeometry = MT001,
+        px_per_mm: float = PX,
     ) -> None:
+        """`px_per_mm` is the render resolution. The glyph images are 4 px/mm (as
+        extracted); they are resampled once, here, to this resolution."""
         missing = [c for c in CHARSET if c not in glyphs]
         if missing:
             raise RenderError(f"glyphs missing for {missing} — run `annotate glyphs`")
         self.geometry = g = geometry
-        self.size = g.render_size(PX)
+        self.px = float(px_per_mm)
+        self._source = (glyphs, origins)
+        self._others: dict[float, PlateRenderer] = {}
+        k = self.px / GLYPH_PX  # glyph pixels -> render pixels
+        self.size = g.render_size(self.px)
 
         def ink_box(img: np.ndarray) -> tuple[int, int, int, int]:
             ys, xs = np.nonzero(img >= 128)
             return xs.min(), ys.min(), xs.max() + 1, ys.max() + 1
 
         boxes = {c: ink_box(glyphs[c]) for c in CHARSET}
-        ink_h = statistics.median((b[3] - b[1]) / PX for b in boxes.values())
-        ink_w = statistics.median((b[2] - b[0]) / PX for c, b in boxes.items() if c not in NARROW)
+        ink_h = statistics.median((b[3] - b[1]) / GLYPH_PX for b in boxes.values())
+        ink_w = statistics.median(
+            (b[2] - b[0]) / GLYPH_PX for c, b in boxes.items() if c not in NARROW
+        )
         #: photographed mm -> plate mm, one pair for the whole set
         self.scale = (g.char_w / ink_w, g.char_h / ink_h)
         self.photo_ink_mm = (ink_w, ink_h)
@@ -182,16 +192,18 @@ class PlateRenderer:
             img, (ox, oy) = glyphs[c], origins[c]
             x0, y0, _, _ = boxes[c]
             # Place so the ink's top lands on the top line exactly; keep x as measured.
-            top_mm = oy + y0 / PX
-            w, h = round(img.shape[1] * sx), round(img.shape[0] * sy)
-            self.chars[c] = _Sprite(_binarise(img, w, h), ox * sx * PX, (oy - top_mm) * sy * PX)
+            top_mm = oy + y0 / GLYPH_PX
+            w, h = round(img.shape[1] * sx * k), round(img.shape[0] * sy * k)
+            self.chars[c] = _Sprite(
+                _binarise(img, w, h), ox * sx * self.px, (oy - top_mm) * sy * self.px
+            )
 
         # Municipality letters: the same letterforms at MT-001 strip size, stroke
         # thickened towards the 5 mm the spec gives (scaling alone leaves ~3 mm).
         msx = g.muni_char_w / ink_w
         msy = g.muni_h / ink_h
         stroke_now = g.char_stroke * msx
-        grow = max(0, round((g.muni_stroke - stroke_now) / 2 * PX))
+        grow = max(0, round((g.muni_stroke - stroke_now) / 2 * self.px))
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * grow + 1,) * 2)
         self.muni: dict[str, _Sprite] = {}
         for c in CHARSET:
@@ -199,13 +211,13 @@ class PlateRenderer:
             x0, y0, x1, y1 = boxes[c]
             crop = img[y0:y1, x0:x1]
             # Shrink first, then thicken: the letter ends up at MT-001 size.
-            w = max(1, round(crop.shape[1] * msx) - 2 * grow)
-            h = max(1, round(crop.shape[0] * msy) - 2 * grow)
+            w = max(1, round(crop.shape[1] * msx * k) - 2 * grow)
+            h = max(1, round(crop.shape[0] * msy * k) - 2 * grow)
             m = _binarise(crop, w, h)
             m = cv2.copyMakeBorder(m, grow, grow, grow, grow, cv2.BORDER_CONSTANT, value=0)
             if grow:
                 m = cv2.dilate(m, kernel)
-            adv = (g.muni_char_w if c not in NARROW else max(w / PX, 5.0)) * PX
+            adv = (g.muni_char_w if c not in NARROW else max(w / self.px, 5.0)) * self.px
             self.muni[c] = _Sprite(m, (adv - m.shape[1]) / 2, -grow, adv)
         self.muni_pad = grow
         self.muni.update(self._punctuation())
@@ -213,30 +225,41 @@ class PlateRenderer:
         # Static layers.
         W, H = self.size
         rim = np.ones((H, W), np.float32)
-        r = round(RIM_MM * PX)
+        r = round(RIM_MM * self.px)
         rim[r:-r, r:-r] = 0
         self.rim = cv2.GaussianBlur(rim, (3, 3), 0.6)
         self.slots = np.zeros((H, W), np.float32)
         for cx, cy in SLOT_CENTRES_MM:
-            axes = (round(SLOT_SIZE_MM[0] / 2 * PX), round(SLOT_SIZE_MM[1] / 2 * PX))
-            cv2.ellipse(self.slots, (round(cx * PX), round(cy * PX)), axes, 0, 0, 360, 1.0, -1)
+            axes = (round(SLOT_SIZE_MM[0] / 2 * self.px), round(SLOT_SIZE_MM[1] / 2 * self.px))
+            cv2.ellipse(
+                self.slots, (round(cx * self.px), round(cy * self.px)), axes, 0, 0, 360, 1.0, -1
+            )
         self.slot_idx = np.nonzero(self.slots > 0)
         self.logo = np.zeros((H, W), np.float32)
         if "logo" in glyphs:
             img, (ox, oy) = glyphs["logo"], origins["logo"]
-            w, h = round(img.shape[1] * sx), round(img.shape[0] * sy)
+            w, h = round(img.shape[1] * sx * k), round(img.shape[0] * sy * k)
             gut = g.logo_gutter_box
-            lx = round((gut.center[0] + ox * sx) * PX)
-            ly = round((g.char_top + g.char_h / 2 + oy * sy) * PX)
+            lx = round((gut.center[0] + ox * sx) * self.px)
+            ly = round((g.char_top + g.char_h / 2 + oy * sy) * self.px)
             self._paste(self.logo, _binarise(img, w, h), lx, ly)
+
+    def at(self, px_per_mm: float) -> PlateRenderer:
+        """This renderer at another resolution, built once and cached."""
+        if px_per_mm == self.px:
+            return self
+        if px_per_mm not in self._others:
+            glyphs, origins = self._source
+            self._others[px_per_mm] = PlateRenderer(glyphs, origins, self.geometry, px_per_mm)
+        return self._others[px_per_mm]
 
     def _punctuation(self) -> dict[str, _Sprite]:
         g = self.geometry
-        h = round(g.muni_h * PX)
-        s = round(g.muni_stroke * PX)
+        h = round(g.muni_h * self.px)
+        s = round(g.muni_stroke * self.px)
         out = {}
         for ch, adv_mm in PUNCT_ADVANCE_MM.items():
-            adv = round(adv_mm * PX)
+            adv = round(adv_mm * self.px)
             m = np.zeros((h, adv), np.float32)
             if ch == ".":
                 m[h - s :, (adv - s) // 2 : (adv - s) // 2 + s] = 1
@@ -267,22 +290,22 @@ class PlateRenderer:
             if ch not in self.muni:
                 raise RenderError(f"municipality {name!r}: no letterform for {ch!r}")
             sprites.append(self.muni[ch])
-        gap = g.muni_spacing * PX
+        gap = g.muni_spacing * self.px
         width = sum(s.advance for s in sprites) + gap * max(0, len(sprites) - 1)
         band = g.muni_band
         pad = self.muni_pad
-        h = round(g.muni_h * PX) + 2 * pad
+        h = round(g.muni_h * self.px) + 2 * pad
         strip = np.zeros((h, max(1, math.ceil(width)) + 2 * pad), np.float32)
         x = float(pad)
         for s in sprites:
             self._paste(strip, s.mask, round(x + s.dx), round(pad + s.dy))
             x += s.advance + gap
-        band_w = band.w * PX
+        band_w = band.w * self.px
         if strip.shape[1] - 2 * pad > band_w:  # auto-fit: condense long names
             new_w = max(1, round(band_w + 2 * pad * band_w / (strip.shape[1] - 2 * pad)))
             strip = cv2.resize(strip, (new_w, h), interpolation=cv2.INTER_AREA)
-        sx = round(band.center[0] * PX - strip.shape[1] / 2)
-        sy = round(band.y * PX) - pad
+        sx = round(band.center[0] * self.px - strip.shape[1] / 2)
+        sy = round(band.y * self.px) - pad
         self._paste(canvas, strip, sx, sy)
 
     def relief(self, spec: PlateSpec) -> tuple[np.ndarray, np.ndarray]:
@@ -297,8 +320,8 @@ class PlateRenderer:
         canvas = self.rim.copy()
         for box, ch in zip(self.geometry.char_boxes(), text, strict=True):
             s = self.chars[ch]
-            cx = (box.x + box.w / 2) * PX
-            self._paste(canvas, s.mask, round(cx + s.dx), round(box.y * PX + s.dy))
+            cx = (box.x + box.w / 2) * self.px
+            self._paste(canvas, s.mask, round(cx + s.dx), round(box.y * self.px + s.dy))
         muni = np.zeros_like(canvas)
         self._municipality(muni, spec.municipality)
         return canvas, muni
@@ -308,7 +331,7 @@ class PlateRenderer:
         relief, muni = self.relief(spec)
         light = spec.lighting
         L = light.unit()
-        e = spec.emboss_mm * PX  # emboss height in px
+        e = spec.emboss_mm * self.px  # emboss height in px
 
         vx, vy = spec.view
         em = e * MUNI_RELIEF
@@ -320,7 +343,7 @@ class PlateRenderer:
         # Height (px units, so gradients are slopes). Only the bevels have slope;
         # a flat patch keeps its base colour exactly, so light only those pixels.
         height = cv2.GaussianBlur(
-            cv2.addWeighted(face_hi, e, face_lo, em, 0.0), (0, 0), BEVEL_MM * PX
+            cv2.addWeighted(face_hi, e, face_lo, em, 0.0), (0, 0), BEVEL_MM * self.px
         )
         gx = cv2.Sobel(height, cv2.CV_32F, 1, 0, ksize=3) / 8.0
         gy = cv2.Sobel(height, cv2.CV_32F, 0, 1, ksize=3) / 8.0

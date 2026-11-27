@@ -31,6 +31,9 @@ class Ranges:
     """The envelope, easy end first. Sprint 3.2 versions and hashes this."""
 
     plate_px: tuple[float, float] = (260.0, 70.0)  # final plate width, log-scale
+    #: True: width shrinks with severity (demo sheets). False: log-uniform over the
+    #: whole range regardless of severity — the corpus sampling policy (plan, 3.2).
+    plate_px_follows_severity: bool = True
     yaw_deg: float = 25.0  # truncated-normal limits (plan: front-plate envelope)
     pitch_deg: float = 15.0
     roll_deg: float = 8.0
@@ -65,6 +68,7 @@ class Ranges:
     plate_sat: tuple[float, float] = (175.0, 250.0)
     plate_val: tuple[float, float] = (195.0, 250.0)
     ink_level: tuple[float, float] = (14.0, 62.0)
+    publico_val: tuple[float, float] = (215.0, 248.0)  # white sheet, slightly warm
 
 
 DEFAULT_RANGES = Ranges()
@@ -137,11 +141,13 @@ def _angle(rng: np.random.Generator, limit: float, s: float) -> float:
     return float(np.clip(rng.normal(0.0, limit / 2), -limit, limit)) * s
 
 
-def random_text(rng: np.random.Generator) -> str:
-    """Uniform letters and digits: no issuance-series prior for the model to learn."""
+def random_text(rng: np.random.Generator, moto: bool = False) -> str:
+    """Uniform letters and digits: no issuance-series prior for the model to learn.
+    Motorbike plates end in a letter: LLLDDL."""
     letters = "".join(rng.choice(list(LETTERS), 3))
-    digits = "".join(rng.choice(list(DIGITS), 3))
-    return letters + digits
+    if moto:
+        return letters + "".join(rng.choice(list(DIGITS), 2)) + str(rng.choice(list(LETTERS)))
+    return letters + "".join(rng.choice(list(DIGITS), 3))
 
 
 def sample_params(
@@ -152,7 +158,11 @@ def sample_params(
     n_backgrounds: int = 0,
     ranges: Ranges = DEFAULT_RANGES,
     text: str | None = None,
+    style: str = "particular",
 ) -> SampleParams:
+    """`style`: "particular" (a readable, valid plate), "publico" (white sheet, same
+    layout) or "moto" (LLLDDL with COLOMBIA in the strip — the single-line motorbike
+    plates seen in the labelled photos)."""
     if not 0.0 <= severity <= 1.0:
         raise ValueError(f"severity must be in [0, 1], got {severity}")
     s = severity
@@ -253,10 +263,12 @@ def sample_params(
     return SampleParams(
         severity=float(s),
         seed=int(rng.integers(0, 2**31 - 1)),
-        text=text or random_text(rng),
-        municipality=str(rng.choice(municipalities)) if municipalities else "BOGOTA D.C.",
-        style="particular",
-        plate_rgb=_plate_rgb(rng, r),
+        text=text or random_text(rng, moto=style == "moto"),
+        municipality="COLOMBIA"
+        if style == "moto"
+        else (str(rng.choice(municipalities)) if municipalities else "BOGOTA D.C."),
+        style=style,
+        plate_rgb=_publico_rgb(rng, r) if style == "publico" else _plate_rgb(rng, r),
         ink_rgb=_ink_rgb(rng, r),
         night=night,
         light_dir=light,
@@ -265,7 +277,9 @@ def sample_params(
         pitch_deg=_angle(rng, r.pitch_deg, s),
         roll_deg=_angle(rng, r.roll_deg, s),
         distance_mm=_mag(rng, r.distance_mm, s),
-        plate_px=_log_mag(rng, r.plate_px, s),
+        plate_px=_log_mag(rng, r.plate_px, s)
+        if r.plate_px_follows_severity
+        else _log_mag(rng, r.plate_px, 1.0),
         background=int(rng.integers(0, n_backgrounds)) if n_backgrounds else -1,
         bg_offset=(float(rng.normal(0, 0.05)), float(rng.normal(0, 0.05))),
         corner_jitter=tuple(
@@ -303,6 +317,11 @@ def _plate_rgb(rng: np.random.Generator, r: Ranges) -> tuple[int, int, int]:
     )
     rgb = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)[0, 0]
     return (int(rgb[0]), int(rgb[1]), int(rgb[2]))
+
+
+def _publico_rgb(rng: np.random.Generator, r: Ranges) -> tuple[int, int, int]:
+    v = float(rng.uniform(*r.publico_val))
+    return (round(v), round(v * 0.99), round(v * 0.95))
 
 
 def _ink_rgb(rng: np.random.Generator, r: Ranges) -> tuple[int, int, int]:

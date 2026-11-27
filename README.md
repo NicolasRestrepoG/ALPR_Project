@@ -6,11 +6,12 @@ access control at a residential building.
 The project is planned in 8 phases and 20 sprints. This README covers only how to
 run what currently exists.
 
-**Status: Phases 1–2 complete; Phase 3 in progress (Sprint 3.1).** `data_sources`
+**Status: Phases 1–2 complete; Phase 3 in progress (Sprint 3.2).** `data_sources`
 has all eleven sources registered, licence-audited and reachable through one
 command. `plates` has the MT-001 geometry, rectification, the `annotate`
 labelling tool, a frozen provisional test set, the 36 extracted glyphs, and the
-plate renderer. `synth` has the degradation pipeline and the background corpus.
+plate renderer. `synth` has the degradation pipeline, the background corpus and the
+hash-identified corpus builder.
 Nothing else exists yet, deliberately — one phase creates one module, and nothing
 is scaffolded ahead.
 
@@ -272,6 +273,8 @@ expect the renderer to need that shadow to look real.
 generate backgrounds        # ~19k vehicle-front crops (CCPD + Roboflow), ~20 s on 8 cores
 generate demo               # data/synth/demo_sheet.png: rows from severity 0 to 1
 generate compare            # data/synth/compare.png: 20 real + 20 synthetic, shuffled
+generate corpus             # 20k training crops → data/corpus/<hash>/ (~75 s on 8 cores)
+generate ablation           # four 20k corpora that differ only in stage order
 ```
 
 A sample is a rendered plate taken through seven stages, **in this order**, each
@@ -301,6 +304,39 @@ Backgrounds are crops around real plates with the plate painted out, placed so t
 synthetic plate lands where the real one was. **Photos in the frozen test set are
 never used.** `generate compare` writes a numbered sheet and a separate answer key:
 if you can sort the crops at a glance, the difference is visible to the model too.
+
+### The corpus — `generate corpus`
+
+A `CorpusSpec` (size, seed, class mix, severity range, stage order, sampling
+ranges) plus the digests of every input (glyphs, background index, municipality
+list, CCPD index, generator version) hash to a 16-character id; the corpus lives
+in `data/corpus/<id>/`. Same spec and inputs, same id, same pixels: sample `i`
+draws from its own seeded stream, so worker count does not matter, and a finished
+corpus is reused instead of rebuilt. **Every trained model must record the id of
+the corpus it saw.**
+
+Each sample is written already rectified (corner jitter baked in) as
+`<index>_<class>_<text|none>.png`, with `labels.jsonl` alongside. The mix:
+
+| Class | Share | What it is |
+|---|---|---|
+| particular | 88% | the plates to read — the only `valid` class |
+| público | 5% | white sheet, same layout |
+| moto | 2% | `LLLDDL` with COLOMBIA in the strip, as in the labelled photos |
+| ccpd | 3% | real Chinese plates, rectified from their corners |
+| non-plate | 2% | textured, plate-shaped patches of vehicle fronts |
+
+Letters and digits are uniform and balanced per position (spread 3.5% / 1.7%);
+plate width is log-uniform 70–260 px. Municipalities are uniform: the DIVIPOLA list
+has no population column, so the plan's population weighting waits for one.
+
+To keep 250+ samples/s, each plate is rendered at the coarsest of 1, 2 or 4 px/mm
+that keeps the warp at least 4x its final width — the warp still happens well
+above the final resolution, before the single band-limiting downsample.
+
+`generate ablation` builds the correct order plus three wrong ones
+(composite-after-downsample, noise-before-blur, JPEG-before-noise). Training them
+is Phase 4's first job: the correct order must win by at least 3 points.
 
 ## Two contracts that cause silent failures if ignored
 
@@ -356,7 +392,9 @@ alpr/synth/          [phase 3]  the synthetic corpus
   augment                       bolts, frames, dirt, wear, grille, bloom, infrared
   backgrounds                   vehicle-front crops, plate painted out, test set excluded
   pipeline                      render → occluders → the seven stages → 192 × 96 crop
-  generate           (CLI)      backgrounds, demo sheet, real-vs-synthetic comparison
+  negatives                     CCPD and non-plate crops (público and moto are rendered)
+  corpus                        spec → hash → directory; parallel, deterministic builder
+  generate           (CLI)      backgrounds, demo, compare, corpus, ablation
 tests/                          mirrors the module layout
 data/                           never in version control
 docs/

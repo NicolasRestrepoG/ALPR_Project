@@ -20,7 +20,7 @@ import numpy as np
 Corners = np.ndarray  # (4, 2) float64, TL/TR/BR/BL
 
 #: Context kept around the plate, as a fraction of its projected width.
-MARGIN = 0.25
+MARGIN = 0.15  # enough for corner jitter, blur support and the background's edges
 
 
 def _rotation(yaw_deg: float, pitch_deg: float, roll_deg: float) -> np.ndarray:
