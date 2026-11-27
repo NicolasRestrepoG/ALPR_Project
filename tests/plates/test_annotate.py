@@ -196,7 +196,8 @@ def test_plates_package_imports_no_ml_framework():
     import sys
 
     code = (
-        "import sys, alpr.plates.annotate, alpr.plates.rectify, alpr.plates.geometry; "
+        "import sys, alpr.plates.annotate, alpr.plates.rectify, alpr.plates.geometry, "
+        "alpr.plates.glyphs, alpr.plates.render, alpr.plates.testset; "
         "bad = sorted({'torch','torchvision','ultralytics'} & set(sys.modules)); "
         "print(bad); sys.exit(1 if bad else 0)"
     )

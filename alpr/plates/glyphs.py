@@ -88,9 +88,18 @@ class Instance:
 
 @dataclass
 class Glyph:
+    """A character (or the logo) as photographed.
+
+    `origin_mm` places the image: its top-left corner relative to the slot's centre
+    line and the characters' top line (for the logo: the gutter centre and the
+    characters' mid-height), in photographed millimetres. A "1" sits off-centre in
+    its cell; without this the renderer would centre it.
+    """
+
     char: str
     image: np.ndarray  # uint8, 255 = ink, cropped
     instances: list[Instance] = field(default_factory=list)
+    origin_mm: tuple[float, float] = (0.0, 0.0)
 
     @property
     def cars(self) -> list[str]:
@@ -261,9 +270,10 @@ def combine(instances: Sequence[Instance], rounds: int = 3) -> np.ndarray:
     return ref
 
 
-def finish(dark: np.ndarray) -> np.ndarray | None:
-    """Keep the main blob, crop to the ink with MARGIN_MM, return uint8 (255 = ink).
-    None when there is no ink blob at all (e.g. a plate without a logo)."""
+def finish(dark: np.ndarray) -> tuple[np.ndarray, tuple[int, int]] | None:
+    """Keep the main blob, crop to the ink with MARGIN_MM. Returns the uint8 image
+    (255 = ink) and the crop's top-left (x, y) in the window, or None when there is
+    no ink blob at all (e.g. a plate without a logo)."""
     h, w = dark.shape
     ys, xs = np.nonzero(dark >= 0.5)
     if not len(xs):
@@ -275,19 +285,27 @@ def finish(dark: np.ndarray) -> np.ndarray | None:
     m = round(MARGIN_MM * PX)
     y0, y1 = max(0, ys.min() - m), min(h, ys.max() + 1 + m)
     x0, x1 = max(0, xs.min() - m), min(w, xs.max() + 1 + m)
-    return (np.clip(dark[y0:y1, x0:x1], 0, 1) * 255).round().astype(np.uint8)
+    image = (np.clip(dark[y0:y1, x0:x1], 0, 1) * 255).round().astype(np.uint8)
+    return image, (int(x0), int(y0))
 
 
 def extract(paths: DataPaths, sources: Sequence[str]) -> tuple[dict[str, Glyph], Glyph | None, int]:
     """Build all glyphs present in the sources. Returns (glyphs, logo, skipped)."""
     chars, logos, skipped = collect(paths, sources)
+    anchor = (WIN_W_MM * PX / 2, WIN_ABOVE_MM * PX)  # slot centre, characters' top line
     glyphs = {}
     for c, v in chars.items():
-        image = finish(combine(v)) if v else None
-        if image is not None:
-            glyphs[c] = Glyph(c, image, list(v))
-    logo_image = finish(combine(logos)) if logos else None
-    logo = Glyph("logo", logo_image, logos) if logo_image is not None else None
+        done = finish(combine(v)) if v else None
+        if done is not None:
+            image, (x0, y0) = done
+            origin = ((x0 - anchor[0]) / PX, (y0 - anchor[1]) / PX)
+            glyphs[c] = Glyph(c, image, list(v), origin)
+    logo = None
+    done = finish(combine(logos)) if logos else None
+    if done is not None:
+        image, (x0, y0) = done
+        half = LOGO_WIN_MM * PX / 2  # gutter centre, characters' mid-height
+        logo = Glyph("logo", image, logos, ((x0 - half) / PX, (y0 - half) / PX))
     return glyphs, logo, skipped
 
 
@@ -353,6 +371,7 @@ def write(
             ],
             "confidence": g.confidence,
             "ink_mm": [round(w, 2), round(h, 2)],
+            "origin_mm": [round(g.origin_mm[0], 2), round(g.origin_mm[1], 2)],
             "size_px": [int(g.image.shape[1]), int(g.image.shape[0])],
         }
     manifest = {
@@ -367,6 +386,13 @@ def write(
     sheet = qa_sheet(glyphs)
     cv2.imwrite(str(out / "qa_sheet.png"), sheet)
     return out
+
+
+def load_manifest(paths: DataPaths) -> dict[str, Any]:
+    manifest = glyphs_dir(paths) / MANIFEST_NAME
+    if not manifest.exists():
+        raise LabelError(f"no glyphs at {manifest.parent} — run `annotate glyphs` first")
+    return json.loads(manifest.read_text())
 
 
 def load_glyphs(paths: DataPaths) -> dict[str, np.ndarray]:

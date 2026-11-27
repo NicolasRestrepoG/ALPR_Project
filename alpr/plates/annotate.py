@@ -7,6 +7,8 @@
     annotate freeze <source>... freeze the provisional test set (glyph-source cars excluded)
     annotate verify             recheck a frozen test set against its checksums
     annotate glyphs <source>... extract the 36 characters and the logo from glyph_source plates
+    annotate render <PLATE>     draw a clean embossed plate from the glyphs
+    annotate overlay <source>.. the Sprint 2.2 gate: rendered vs photographed landmarks
 
 The page is served by the standard library on 127.0.0.1 and talks to nothing else.
 It shows each plate zoomed to the source's box when there is one, a magnifier for
@@ -698,6 +700,38 @@ def cmd_glyphs(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_render(args: argparse.Namespace) -> int:
+    from alpr.plates.render import PlateSpec, render
+
+    img = render(PlateSpec(args.plate, args.municipality, view=(0.0, args.view_y)))
+    out = Path(args.out or f"{args.plate.upper()}.png")
+    cv2.imwrite(str(out), cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
+    print(f"written to {out} ({img.shape[1]} x {img.shape[0]})")
+    return 0
+
+
+def cmd_overlay(args: argparse.Namespace) -> int:
+    from alpr.plates.render import GATE_MM, overlay_report
+
+    paths = DataPaths.default()
+    rep = overlay_report(paths, args.sources, view=(0.0, args.view_y))
+    frontal, matched = rep.errors("frontal"), rep.errors("matched")
+    print(f"{rep.plates} photographed plates; renders measured the same way (mm)\n")
+    print(f"{'landmark':12s} {'photos':>7s} {'frontal':>8s} {'view':>7s}")
+    for k, v in rep.real.items():
+        print(f"{k:12s} {v:7.1f} {frontal[k]:+8.1f} {matched[k]:+7.1f}")
+    worst = max(abs(v) for v in matched.values())
+    print(
+        f"\nworst landmark at view {rep.view[1]:g}: {worst:.2f} mm (gate {GATE_MM:g} mm) — "
+        f"{'PASS' if rep.passes() else 'FAIL'}"
+    )
+    print(f"render time: {rep.render_ms:.1f} ms (gate 15 ms)")
+    out = Path(args.out) if args.out else paths.assets_dir / "glyphs" / "overlay.png"
+    cv2.imwrite(str(out), cv2.cvtColor(rep.sheet, cv2.COLOR_RGB2BGR))
+    print(f"side by side (photo | render): {out}")
+    return 0 if rep.passes() else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="annotate", description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -744,6 +778,21 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("glyphs", help="extract the 36 characters from glyph_source plates")
     p.add_argument("sources", nargs="+", help="labelled sources to draw from")
     p.set_defaults(func=cmd_glyphs)
+
+    p = sub.add_parser("render", help="draw a clean embossed plate")
+    p.add_argument("plate", help="six characters, e.g. ABC123")
+    p.add_argument("--municipality", default="BOGOTA D.C.")
+    p.add_argument("--view-y", type=float, default=0.0, help="viewing tilt (0 = frontal)")
+    p.add_argument("--out", help="output PNG (default <PLATE>.png)")
+    p.set_defaults(func=cmd_render)
+
+    p = sub.add_parser("overlay", help="rendered vs photographed landmarks (Sprint 2.2 gate)")
+    p.add_argument("sources", nargs="+")
+    p.add_argument(
+        "--view-y", type=float, default=3.0, help="viewing tilt matching the photos (default 3)"
+    )
+    p.add_argument("--out", help="side-by-side PNG (default data/assets/glyphs/overlay.png)")
+    p.set_defaults(func=cmd_overlay)
 
     p = sub.add_parser("verify", help="recheck a frozen test set")
     p.add_argument("--name", default="provisional")

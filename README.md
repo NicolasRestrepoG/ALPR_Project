@@ -9,7 +9,8 @@ run what currently exists.
 **Status: Phase 1 complete; Phase 2 in progress (Sprint 2.2).** `data_sources`
 has all eleven sources registered, licence-audited and reachable through one
 command. `plates` has the MT-001 geometry, rectification, the `annotate`
-labelling tool, a frozen provisional test set, and the 36 extracted glyphs. Nothing else exists yet, deliberately — one phase creates one
+labelling tool, a frozen provisional test set, the 36 extracted glyphs, and the
+plate renderer. Nothing else exists yet, deliberately — one phase creates one
 module, and nothing is scaffolded ahead.
 
 Own photographs are deferred until just before Phase 5. Until then, the glyph
@@ -158,6 +159,8 @@ annotate measure roboflow_proyecto_placas # measure plate layout from labelled p
 annotate freeze roboflow_proyecto_placas roboflow_placas_colombia_itm   # freeze the test set
 annotate verify                           # recheck the frozen set's checksums
 annotate glyphs roboflow_proyecto_placas roboflow_placas_colombia_itm   # extract the 36 glyphs
+annotate render ABC123 --municipality MEDELLIN   # draw one plate
+annotate overlay roboflow_proyecto_placas roboflow_placas_colombia_itm  # renderer vs photos
 ```
 
 The page shows each plate zoomed to its source box. Click the plate's four
@@ -223,6 +226,30 @@ glyphs with `load_glyphs` from `alpr.plates.glyphs`.
 Glyphs are stored as photographed: their ink is ~6% taller than the 80 mm cell
 (the embossing seen from above). Scaling them into the cell is the renderer's job.
 
+### The renderer — `render(PlateSpec)`
+
+`alpr.plates.render.render(PlateSpec("ABC123", "MEDELLIN"))` returns a clean
+1320 x 640 RGB plate (4 px/mm) drawn from the extracted glyphs at their true size.
+Characters, municipality letters and the border rim are embossed; the plate is lit
+with diffuse and specular shading from `PlateSpec.lighting`, raised parts cast a
+shadow, and `PlateSpec.view` adds the parallax of seeing the relief at an angle.
+
+That parallax explains a measurement from earlier: photographed from above, the
+characters' top edge stays put while the raised face slides down, so their ink
+measures ~85 mm instead of 80. The municipality letters barely move, so they are
+modelled lower (`MUNI_RELIEF`). Phase 3 samples lighting and view per image.
+
+`annotate overlay` is the Sprint 2.2 gate. It measures the labelled photos and
+renders of the same plate strings the same way, and compares ten landmarks
+(character top and bottom, six slot centres, municipality top and bottom):
+
+- at the viewing tilt that matches the Roboflow photos (`--view-y 3`): worst
+  landmark 1.25 mm, slot centres within 0.2 mm (gate 2 mm);
+- frontal: the character bottom differs by 4.6 mm, as expected from the above;
+- render time ~11-13 ms on an M-series Mac (gate 15 ms).
+
+It also writes `overlay.png`, each photographed plate beside its render.
+
 ### Plate geometry — where each number comes from
 
 `alpr/plates/geometry.py` is the single source of truth for plate layout, in
@@ -230,9 +257,9 @@ millimetres, and records the source of every field:
 
 | Source | Fields |
 |---|---|
-| MT-001 as published (confirmed with a tape measure) | plate 330 x 160, characters 40 x 80, stroke, character gap, municipality letter width |
-| Tape measure on a real plate | space above the characters (30), municipality letter height (23) |
-| `annotate measure` on 147 rectified photos | logo gutter (28), gap above the municipality (15) |
+| MT-001 as published (confirmed with a tape measure) | plate 330 x 160, character height 80, stroke, character gap, municipality letter width |
+| Tape measure on a real plate (the photos agree) | space above the characters (30), municipality letter height (23), character width (41) |
+| `annotate measure` on 147 rectified photos | logo gutter (27), gap above the municipality (15) |
 
 In photos the characters' bottom edge reads about 5 mm low, because the embossed
 characters cast a shadow below them. Measure vertical layout from top edges, and
@@ -284,6 +311,7 @@ alpr/plates/         [phase 2]  the plate domain model
   labels                        label storage, items to label, coverage
   testset                       freeze and verify the provisional test set
   glyphs                        extract the 36 characters + logo from labelled plates
+  render                        PlateSpec → embossed, lit 1320 × 640 plate
   annotate           (CLI)      click-4-corners labelling tool
 tests/                          mirrors the module layout
 data/                           never in version control

@@ -6,13 +6,16 @@ here, in millimetres, and converts to pixels at the last moment with `to_px`.
 
 Three kinds of number live in this file, and they are kept apart on purpose:
 
-* **SPEC** — transcribed from MT-001 as published (330 x 160 mm plate, 40 x 80 mm
-  characters, 10 mm stroke, 8 mm character gap, 12 mm municipality letter width).
-  A tape measure on a real plate agreed: 330-334 x 159 mm, characters 79-81 mm
-  tall and 40-41 mm wide.
+* **SPEC** — transcribed from MT-001 as published (330 x 160 mm plate, 80 mm
+  character height, 10 mm stroke, 8 mm character gap, 12 mm municipality letter
+  width). A tape measure on a real plate agreed: 330-334 x 159 mm, characters
+  79-81 mm tall.
 * **TAPE** — measured on a real plate where the published summaries are silent or
-  disagree with it: the space above the characters (30 mm) and the municipality
-  letter height (23 mm; the summary says 22, real plates and photos both say 23).
+  disagree with it: the space above the characters (30 mm), the municipality
+  letter height (23 mm; the summary says 22, real plates and photos both say 23),
+  and the character width (41 mm; the summary says 40, the tape read 40-41, and
+  the character pitch in 200 rectified photos is 49.1 mm = 41 + the 8 mm gap,
+  which also puts the side margins at the photographed ~12.5 mm, not 15).
 * **PHOTO** — measured from 147 labelled, rectified photographs (`annotate
   measure`) where the tape measure was not used: the logo gutter between the letter
   and digit groups, and the gap above the municipality name. The gap is taken from
@@ -121,12 +124,12 @@ class PlateGeometry:
     plate_w: float = 330.0
     plate_h: float = 160.0
 
-    char_w: float = 40.0
+    char_w: float = 41.0
     char_h: float = 80.0
     char_stroke: float = 10.0
     char_gap: float = 8.0
 
-    logo_gutter: float = 28.0
+    logo_gutter: float = 27.0
     char_top: float = 30.0
     muni_gap: float = 15.0
 
@@ -268,7 +271,7 @@ class PlateGeometry:
 PROVENANCE: dict[str, Provenance] = {
     "plate_w": Provenance.SPEC,
     "plate_h": Provenance.SPEC,
-    "char_w": Provenance.SPEC,
+    "char_w": Provenance.TAPE,
     "char_h": Provenance.SPEC,
     "char_stroke": Provenance.SPEC,
     "char_gap": Provenance.SPEC,

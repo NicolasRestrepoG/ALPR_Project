@@ -154,7 +154,8 @@ def test_keep_main_blob_and_combine_are_robust():
             self.dark = d
 
     med = combine([Inst(dark), Inst(shifted), Inst(dark)])
-    assert finish(med).shape[0] > 0
+    image, origin = finish(med)
+    assert image.shape[0] > 0 and origin[1] >= 0
     assert finish(np.zeros((10, 10), np.float32)) is None
     assert darkness(np.full((10, 10), 200, np.uint8)).max() == 0
 
@@ -167,6 +168,9 @@ def test_write_and_load_round_trip(glyph_source):
     assert set(manifest["missing"]) == set("EFGHIJKLMNOPQRSTUVWXYZ056789")
     assert manifest["glyphs"]["B"]["cars"] == ["ABC123", "ABD124", "CBA321"]
     assert (out / "qa_sheet.png").exists()
+    # Origins: ink starts at the characters' top line, roughly centred on the slot.
+    ox, oy = manifest["glyphs"]["B"]["origin_mm"]
+    assert -26 < ox < -14 and -3 < oy < 0
     loaded = load_glyphs(glyph_source)
     assert np.array_equal(loaded["A"], glyphs["A"].image)
 
