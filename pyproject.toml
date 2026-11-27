@@ -20,6 +20,9 @@ dependencies = [
     # Phase 2 — image arrays, homography, decoding. BSD-3 and Apache-2.0.
     "numpy>=1.26",
     "opencv-python-headless>=4.9",
+    # Phase 4 — the recognizer. BSD-3. Only alpr/recognizer imports it; phases 1-3
+    # stay importable without it (tested).
+    "torch>=2.9",
 ]
 
 [project.optional-dependencies]

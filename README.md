@@ -6,12 +6,12 @@ access control at a residential building.
 The project is planned in 8 phases and 20 sprints. This README covers only how to
 run what currently exists.
 
-**Status: Phases 1–2 complete; Phase 3 in progress (Sprint 3.2).** `data_sources`
+**Status: Phases 1–3 complete; Phase 4 in progress (Sprint 4.1).** `data_sources`
 has all eleven sources registered, licence-audited and reachable through one
 command. `plates` has the MT-001 geometry, rectification, the `annotate`
 labelling tool, a frozen provisional test set, the 36 extracted glyphs, and the
 plate renderer. `synth` has the degradation pipeline, the background corpus and the
-hash-identified corpus builder.
+hash-identified corpus builder. `recognizer` has the model architecture.
 Nothing else exists yet, deliberately — one phase creates one module, and nothing
 is scaffolded ahead.
 
@@ -27,7 +27,7 @@ python3 -m venv .venv
 ```
 
 Phase 1 needs `requests`, `tqdm` and `gdown`; Phase 2 adds `numpy` and
-`opencv-python-headless`. PyTorch arrives in Phase 4, not on day one.
+`opencv-python-headless`; Phase 4 adds `torch` (used only by `alpr/recognizer`).
 
 ## Credentials
 
@@ -52,7 +52,7 @@ sources. Everything else works without any credentials.
 ## Test
 
 ```bash
-.venv/bin/pytest          # a few seconds; no ML framework required
+.venv/bin/pytest          # ~10 s; only tests/recognizer needs PyTorch
 .venv/bin/ruff check .
 .venv/bin/ruff format .
 ```
@@ -338,6 +338,29 @@ above the final resolution, before the single band-limiting downsample.
 (composite-after-downsample, noise-before-blur, JPEG-before-noise). Training them
 is Phase 4's first job: the correct order must win by at least 3 points.
 
+## The recognizer — `alpr/recognizer`
+
+`Recognizer.read(crop)` takes a rectified 96 × 192 RGB crop and returns a
+`Reading(plate, per_position_confidence, validity)`. The model (plan §9):
+
+| Part | Shape | Parameters |
+|---|---|---|
+| Trunk: ten 3×3 conv+BN+ReLU, 32→64→128→256→256; pooling 2,2,2 then (2,1),(2,1),(3,1) | 3×96×192 → 24×256 | 2,353,888 |
+| Positional attention head: 6 learned queries over 24 columns; letter classifiers (26) at positions 1–3, digit classifiers (10) at 4–6; validity head | → 6 logit sets + validity | 183,533 |
+| CTC head (the Sprint 5.3 ablation): BiGRU 256→2×128, 37-way | → 24×37 | 305,957 |
+
+The parameter counts are tested exactly: if one is off, a layer is wrong. The
+letter/digit split makes the classic plate confusions (0/O, 1/I, 8/B, 5/S, 2/Z,
+6/G) impossible rather than unlikely — position 2 has no `0` to output.
+
+Attention starts on the expected columns (2, 6, 10, 14, 18, 22): the queries are
+initialised to those columns' positional embeddings and the key projection to the
+identity. `alpr.recognizer.diagnostics.AttentionLog` records each epoch's peaks,
+flags any that are not left-to-right ordered, and draws a per-epoch figure.
+
+**Apple-GPU (MPS) runs are for shape and loss-direction sanity only.** MPS and CUDA
+differ numerically; every reported number comes from a CUDA run.
+
 ## Two contracts that cause silent failures if ignored
 
 **Corners are always ordered TL, TR, BR, BL.** CCPD publishes its four vertices
@@ -395,6 +418,9 @@ alpr/synth/          [phase 3]  the synthetic corpus
   negatives                     CCPD and non-plate crops (público and moto are rendered)
   corpus                        spec → hash → directory; parallel, deterministic builder
   generate           (CLI)      backgrounds, demo, compare, corpus, ablation
+alpr/recognizer/     [phase 4]  the from-scratch recognizer (the only PyTorch user)
+  model                         trunk, attention head, CTC head, Reading, read()
+  diagnostics                   attention drift: per-epoch peaks and figure
 tests/                          mirrors the module layout
 data/                           never in version control
 docs/
