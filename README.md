@@ -6,12 +6,13 @@ access control at a residential building.
 The project is planned in 8 phases and 20 sprints. This README covers only how to
 run what currently exists.
 
-**Status: Phase 1 complete; Phase 2 in progress (Sprint 2.2).** `data_sources`
+**Status: Phases 1–2 complete; Phase 3 in progress (Sprint 3.1).** `data_sources`
 has all eleven sources registered, licence-audited and reachable through one
 command. `plates` has the MT-001 geometry, rectification, the `annotate`
 labelling tool, a frozen provisional test set, the 36 extracted glyphs, and the
-plate renderer. Nothing else exists yet, deliberately — one phase creates one
-module, and nothing is scaffolded ahead.
+plate renderer. `synth` has the degradation pipeline and the background corpus.
+Nothing else exists yet, deliberately — one phase creates one module, and nothing
+is scaffolded ahead.
 
 Own photographs are deferred until just before Phase 5. Until then, the glyph
 source and a provisional test set come from the Roboflow images, labelled with
@@ -265,6 +266,42 @@ In photos the characters' bottom edge reads about 5 mm low, because the embossed
 characters cast a shadow below them. Measure vertical layout from top edges, and
 expect the renderer to need that shadow to look real.
 
+## Synthetic plates — the `generate` command
+
+```bash
+generate backgrounds        # ~19k vehicle-front crops (CCPD + Roboflow), ~20 s on 8 cores
+generate demo               # data/synth/demo_sheet.png: rows from severity 0 to 1
+generate compare            # data/synth/compare.png: 20 real + 20 synthetic, shuffled
+```
+
+A sample is a rendered plate taken through seven stages, **in this order**, each
+where a real camera does it (one module each under `alpr/synth/stages/`):
+
+1. **warp** — perspective at full render resolution (resampling only once, later)
+2. **composite** onto a vehicle-front background, still at render resolution, so
+   the plate's edge is band-limited like everything else
+3. **downsample** to the sampled plate width with an area filter — the one band-limit
+4. **photometric** — exposure, white balance, shadow, specular band, headlight
+   bloom, infrared mode, then the tone curve
+5. **blur** — motion and defocus
+6. **noise** — Poisson shot + Gaussian read, per pixel, after blur
+7. **JPEG** — last
+
+then it is rectified with slightly jittered corners into the 192 × 96 crop the
+recognizer reads. Before the warp, worn paint, grime, decorative frames and bolt
+heads go on the flat plate; grille bars go on the scene before the downsample.
+
+Every random choice is drawn first into a `SampleParams` (`alpr/synth/params.py`),
+so a sample is reproducible from its parameters. One **severity** scalar in [0, 1]
+scales every magnitude: 0 is a clean, frontal, large plate; 1 lets every effect
+reach the harsh end of its range. Plate and ink colours are sampled from the range
+measured on real labelled plates (amber sheet, warm dark ink).
+
+Backgrounds are crops around real plates with the plate painted out, placed so the
+synthetic plate lands where the real one was. **Photos in the frozen test set are
+never used.** `generate compare` writes a numbered sheet and a separate answer key:
+if you can sort the crops at a glance, the difference is visible to the model too.
+
 ## Two contracts that cause silent failures if ignored
 
 **Corners are always ordered TL, TR, BR, BL.** CCPD publishes its four vertices
@@ -313,6 +350,13 @@ alpr/plates/         [phase 2]  the plate domain model
   glyphs                        extract the 36 characters + logo from labelled plates
   render                        PlateSpec → embossed, lit 1320 × 640 plate
   annotate           (CLI)      click-4-corners labelling tool
+alpr/synth/          [phase 3]  the synthetic corpus
+  params                        every random choice for a sample; severity
+  stages/                       warp · composite · downsample · photometric · blur · noise · jpeg
+  augment                       bolts, frames, dirt, wear, grille, bloom, infrared
+  backgrounds                   vehicle-front crops, plate painted out, test set excluded
+  pipeline                      render → occluders → the seven stages → 192 × 96 crop
+  generate           (CLI)      backgrounds, demo sheet, real-vs-synthetic comparison
 tests/                          mirrors the module layout
 data/                           never in version control
 docs/

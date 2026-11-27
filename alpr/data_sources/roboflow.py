@@ -481,8 +481,16 @@ class PlacasColombiaItmSource(RoboflowSource):
         license_key="mit",
         access=AccessMode.API_KEY,
         # Glyphs and recognizer evaluation stand in for the own photos until Phase 5
-        # (provisional V0; see alpr/plates/testset.py).
-        purposes=frozenset({Purpose.DETECTOR_FINETUNE, Purpose.GLYPHS, Purpose.RECOGNIZER_EVAL}),
+        # (provisional V0; see alpr/plates/testset.py). Backgrounds: vehicle fronts
+        # with the plate painted out (alpr/synth/backgrounds.py).
+        purposes=frozenset(
+            {
+                Purpose.DETECTOR_FINETUNE,
+                Purpose.GLYPHS,
+                Purpose.RECOGNIZER_EVAL,
+                Purpose.BACKGROUNDS,
+            }
+        ),
         url=project.url,
         size_hint="~100 images",
         notes=(
@@ -511,8 +519,16 @@ class ProyectoPlacasSource(RoboflowSource):
         license_key="cc-by-4.0",
         access=AccessMode.API_KEY,
         # Glyphs and recognizer evaluation stand in for the own photos until Phase 5
-        # (provisional V0; see alpr/plates/testset.py).
-        purposes=frozenset({Purpose.DETECTOR_FINETUNE, Purpose.GLYPHS, Purpose.RECOGNIZER_EVAL}),
+        # (provisional V0; see alpr/plates/testset.py). Backgrounds: vehicle fronts
+        # with the plate painted out (alpr/synth/backgrounds.py).
+        purposes=frozenset(
+            {
+                Purpose.DETECTOR_FINETUNE,
+                Purpose.GLYPHS,
+                Purpose.RECOGNIZER_EVAL,
+                Purpose.BACKGROUNDS,
+            }
+        ),
         url=project.url,
         size_hint="274 images (v1, un-augmented)",
         notes=(
